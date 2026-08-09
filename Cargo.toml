@@ -1,0 +1,29 @@
+[package]
+name = "vmx"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"
+license = "MIT"
+description = "Pure Rust VMX1 video codec"
+authors = ["MikanseiLaboratory"]
+readme = "README.md"
+
+[lib]
+name = "vmx"
+path = "src/lib.rs"
+
+[features]
+default = []
+
+[dependencies]
+thiserror = "2"
+
+[dev-dependencies]
+criterion = "0.5"
+
+[[bench]]
+name = "encode_decode"
+harness = false
+
+[[example]]
+name = "roundtrip"

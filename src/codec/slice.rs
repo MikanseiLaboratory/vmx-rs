@@ -1,7 +1,8 @@
 //! Slice-parallel encode/decode.
 
 use crate::bitstream::SliceData;
-use crate::codec::plane::{PlaneView, decode_plane_scalar, encode_plane_scalar};
+use crate::codec::plane::{PlaneView, decode_plane_scalar};
+use crate::simd::sse128::encode_plane;
 use crate::thread_pool::ThreadPool;
 use crate::types::SLICE_HEIGHT;
 
@@ -45,13 +46,12 @@ pub struct PlaneBuffers {
     pub height: [i32; 4],
 }
 
-pub fn encode_slices(
+fn encode_slice_range(
     planes: &PlaneBuffers,
     slices: &mut [SliceSet],
     encode_matrix: &[u16],
     dc_shift: i32,
     plane_count: usize,
-    _pool: Option<&ThreadPool>,
 ) {
     let plane_count = plane_count.clamp(1, 4);
     for slice in slices.iter_mut() {
@@ -65,7 +65,7 @@ pub fn encode_slices(
                     planes.data[pi].len(),
                 )
             };
-            encode_plane_scalar(
+            encode_plane(
                 &PlaneView {
                     index: pi,
                     data,
@@ -82,37 +82,65 @@ pub fn encode_slices(
     }
 }
 
-pub fn decode_slices(
-    planes: &mut PlaneBuffers,
+pub fn encode_slices(
+    planes: &PlaneBuffers,
+    slices: &mut [SliceSet],
+    encode_matrix: &[u16],
+    dc_shift: i32,
+    plane_count: usize,
+    pool: Option<&ThreadPool>,
+) {
+    let plane_count = plane_count.clamp(1, 4);
+    match pool {
+        Some(pool) if pool.thread_count() > 1 && slices.len() > 1 => {
+            pool.parallel_chunks_mut(slices, |chunk| {
+                encode_slice_range(planes, chunk, encode_matrix, dc_shift, plane_count);
+            });
+        }
+        _ => encode_slice_range(planes, slices, encode_matrix, dc_shift, plane_count),
+    }
+}
+
+fn prepare_slice_bitstream(slice: &mut SliceSet) {
+    slice.dc.pos = 0;
+    slice.dc.bits_left = crate::types::BITS_SIZE;
+    slice.dc.temp = 0;
+    slice.dc.temp_read = {
+        let mut buf = [0u8; 8];
+        let n = 8.min(slice.dc.stream.len());
+        buf[..n].copy_from_slice(&slice.dc.stream[..n]);
+        u64::from_be_bytes(buf)
+    };
+    slice.ac.pos = 0;
+    slice.ac.bits_left = crate::types::BITS_SIZE;
+    slice.ac.temp = 0;
+    slice.ac.temp_read = {
+        let mut buf = [0u8; 8];
+        let n = 8.min(slice.ac.stream.len());
+        buf[..n].copy_from_slice(&slice.ac.stream[..n]);
+        u64::from_be_bytes(buf)
+    };
+}
+
+fn decode_slice_range(
+    plane_ptrs: [usize; 3],
+    plane_lens: [usize; 3],
+    strides: [usize; 3],
     slices: &mut [SliceSet],
     decode_matrix: &[u16],
     dc_shift: i32,
 ) {
     for slice in slices.iter_mut() {
-        slice.dc.pos = 0;
-        slice.dc.bits_left = crate::types::BITS_SIZE;
-        slice.dc.temp = 0;
-        slice.dc.temp_read = {
-            let mut buf = [0u8; 8];
-            let n = 8.min(slice.dc.stream.len());
-            buf[..n].copy_from_slice(&slice.dc.stream[..n]);
-            u64::from_be_bytes(buf)
-        };
-        slice.ac.pos = 0;
-        slice.ac.bits_left = crate::types::BITS_SIZE;
-        slice.ac.temp = 0;
-        slice.ac.temp_read = {
-            let mut buf = [0u8; 8];
-            let n = 8.min(slice.ac.stream.len());
-            buf[..n].copy_from_slice(&slice.ac.stream[..n]);
-            u64::from_be_bytes(buf)
-        };
-
+        prepare_slice_bitstream(slice);
         for pi in 0..3 {
+            // SAFETY: each slice writes a disjoint row band; callers split slices across threads.
+            let data = unsafe {
+                std::slice::from_raw_parts_mut(plane_ptrs[pi] as *mut u8, plane_lens[pi])
+            };
             let mut view = PlaneView {
                 index: pi,
-                data: planes.data[pi].as_mut_slice(),
-                stride: planes.stride[pi],
+                data,
+                stride: strides[pi],
                 offset: slice.offset[pi],
             };
             decode_plane_scalar(
@@ -124,5 +152,48 @@ pub fn decode_slices(
                 &mut slice.temp_block,
             );
         }
+    }
+}
+
+pub fn decode_slices(
+    planes: &mut PlaneBuffers,
+    slices: &mut [SliceSet],
+    decode_matrix: &[u16],
+    dc_shift: i32,
+    pool: Option<&ThreadPool>,
+) {
+    let plane_ptrs = [
+        planes.data[0].as_mut_ptr() as usize,
+        planes.data[1].as_mut_ptr() as usize,
+        planes.data[2].as_mut_ptr() as usize,
+    ];
+    let plane_lens = [
+        planes.data[0].len(),
+        planes.data[1].len(),
+        planes.data[2].len(),
+    ];
+    let strides = [planes.stride[0], planes.stride[1], planes.stride[2]];
+
+    match pool {
+        Some(pool) if pool.thread_count() > 1 && slices.len() > 1 => {
+            pool.parallel_chunks_mut(slices, |chunk| {
+                decode_slice_range(
+                    plane_ptrs,
+                    plane_lens,
+                    strides,
+                    chunk,
+                    decode_matrix,
+                    dc_shift,
+                );
+            });
+        }
+        _ => decode_slice_range(
+            plane_ptrs,
+            plane_lens,
+            strides,
+            slices,
+            decode_matrix,
+            dc_shift,
+        ),
     }
 }

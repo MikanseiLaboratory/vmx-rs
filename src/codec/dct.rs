@@ -7,22 +7,22 @@ use crate::tables::{
     SHIFT_INV_ROW, ZIGZAG_INV,
 };
 
-#[inline]
+#[inline(always)]
 fn sat_add_i16(a: i16, b: i16) -> i16 {
     a.saturating_add(b)
 }
 
-#[inline]
+#[inline(always)]
 fn sat_sub_i16(a: i16, b: i16) -> i16 {
     a.saturating_sub(b)
 }
 
-#[inline]
+#[inline(always)]
 fn mulhi_i16(a: i16, b: i16) -> i16 {
     (((a as i32) * (b as i32)) >> 16) as i16
 }
 
-#[inline]
+#[inline(always)]
 fn mulhi_u16(a: u16, b: u16) -> u16 {
     (((a as u32) * (b as u32)) >> 16) as u16
 }
@@ -179,6 +179,8 @@ fn fdct_column_stage(in_rows: [[i16; 8]; 8]) -> [[i16; 8]; 8] {
 }
 
 /// FDCT + quantize + zigzag. Writes 64 coefficients into `out` in zigzag order.
+///
+/// `pub` for encode and Criterion via `vmx::kernels` (not a stable API surface).
 pub fn fdct_quant_zig(
     src: &[u8],
     stride: usize,

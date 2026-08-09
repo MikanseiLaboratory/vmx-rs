@@ -17,6 +17,7 @@ default = []
 
 [dependencies]
 thiserror = "2"
+rayon = "1.10"
 
 [dev-dependencies]
 criterion = "0.5"
@@ -25,5 +26,21 @@ criterion = "0.5"
 name = "encode_decode"
 harness = false
 
+[[bench]]
+name = "simd_paths"
+harness = false
+
 [[example]]
 name = "roundtrip"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+opt-level = 3
+
+# Even more aggressive local profiling builds:
+#   RUSTFLAGS="-C target-cpu=native" cargo build --profile release-fast
+[profile.release-fast]
+inherits = "release"
+lto = "fat"
+strip = "symbols"

@@ -12,15 +12,41 @@ Pure Rust [VMX1](https://github.com/openmediatransport/libvmx) video codec.
 | [libomt](https://github.com/openmediatransport/libomt) | Official C/C++ OMT core library |
 | [libomtnet](https://github.com/openmediatransport/libomtnet) | Official .NET OMT bindings |
 | [libvmx](https://github.com/openmediatransport/libvmx) | Official VMX1 video codec (reference implementation) |
-| [openmediatransport-rs](https://github.com/MikanseiLaboratory/openmediatransport-rs) | Pure Rust OMT protocol stack
+| [openmediatransport-rs](https://github.com/MikanseiLaboratory/openmediatransport-rs) | Pure Rust OMT protocol stack |
 
 ## Goals
 
 - Byte-compatible with `libvmx` (container, entropy, DCT/quant)
 - No native library / FFI / runtime DLL dependency
 - Cross-platform: Windows / Linux / macOS × x86_64 / ARM64
-- Runtime SIMD dispatch: scalar, SSE4.2, AVX2+BMI2, NEON
+- Runtime SIMD dispatch where implemented
+- Slice-parallel encode/decode via [rayon](https://crates.io/crates/rayon)
 - MSRV: Rust 1.88 (edition 2024)
+
+## SIMD vs `libvmx`
+
+| Kernel | libvmx | vmx-rs |
+|--------|--------|--------|
+| FDCT + quant (8-bit) | SSE4.2 / AVX2+BMI2 | **SSE4.2 live**; AVX2 stub → scalar |
+| FDCT + quant (10/16-bit) | SSE / AVX2 | Scalar |
+| IDCT + dequant | SSE / AVX2 | Scalar |
+| UYVY → planar | SSE (SSSE3) | **SSSE3 live** |
+| planar → UYVY | SSE | **SSE2 live** |
+| Other color formats | SSE | Scalar |
+| Slice parallelism | `ThreadTasks` | rayon (bitrate `Threads`) |
+| ARM64 | sse2neon | NEON stub → scalar |
+
+### Instruction-family checklist
+
+| Family | Role | Status | Verified |
+|--------|------|--------|----------|
+| **SSE2** | planar → UYVY | Live | [x] |
+| **SSSE3** | UYVY → planar | Live | [x] |
+| **SSE4.2** | FDCT + quant encode | Live | [x] |
+| **AVX2 + BMI2** | DCT (libvmx path) | Stub → scalar | [ ] |
+| **NEON** | ARM64 kernels | Stub → scalar | [ ] |
+
+Measured scalar vs SIMD timings (i9-9900K): see **[BENCHMARK.md](BENCHMARK.md)** (~11× SSSE3 convert, ~14× SSE2 convert, ~3.4× SSE4.2 FDCT).
 
 ## Usage
 
@@ -41,6 +67,13 @@ let len = enc.save_to(&mut buf)?;
 let mut dec = Codec::new(Config::new(1920, 1080))?;
 dec.load_from(&buf[..len])?;
 dec.decode_uyvy(&mut out, stride)?;
+```
+
+```bash
+cargo test
+cargo bench --bench simd_paths
+cargo bench --bench encode_decode
+RUSTFLAGS="-C target-cpu=native" cargo build --profile release-fast
 ```
 
 ## License

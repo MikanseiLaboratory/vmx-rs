@@ -219,6 +219,22 @@ impl Codec {
         self.size
     }
 
+    pub fn color_space(&self) -> ColorSpace {
+        self.color_space
+    }
+
+    pub fn set_color_space(&mut self, cs: ColorSpace) {
+        self.color_space = if cs == ColorSpace::Undefined {
+            if self.size.height >= 720 {
+                ColorSpace::Bt709
+            } else {
+                ColorSpace::Bt601
+            }
+        } else {
+            cs
+        };
+    }
+
     pub fn preview_size(&self) -> Size {
         self.preview_size
     }
@@ -289,12 +305,12 @@ impl Codec {
             ImageFormat::Bgra | ImageFormat::Bgrx | ImageFormat::Uyva | ImageFormat::Pa16 => 4,
             _ => 3,
         };
-        let matrix = self.encode_presets[self.decode_matrix_idx].clone();
         let dc_shift = self.dc_shift;
+        let idx = self.decode_matrix_idx;
         encode_slices(
             &self.planes,
             &mut self.slices,
-            &matrix,
+            &self.encode_presets[idx],
             dc_shift,
             plane_count,
             Some(&self.pool),
@@ -302,9 +318,15 @@ impl Codec {
     }
 
     fn decode_planes(&mut self) {
-        let matrix = self.decode_presets[self.decode_matrix_idx].clone();
         let dc_shift = self.dc_shift;
-        decode_slices(&mut self.planes, &mut self.slices, &matrix, dc_shift);
+        let idx = self.decode_matrix_idx;
+        decode_slices(
+            &mut self.planes,
+            &mut self.slices,
+            &self.decode_presets[idx],
+            dc_shift,
+            Some(&self.pool),
+        );
     }
 
     pub fn save_to(&mut self, dst: &mut [u8]) -> Result<usize> {

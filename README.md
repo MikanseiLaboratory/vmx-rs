@@ -44,6 +44,18 @@ Status of hot-path kernels compared to
 
 Runtime feature checks use `is_x86_feature_detected!` (SSE4.2 for FDCT, SSSE3/SSE2 for UYVY). AVX2 is detected and recorded on `CpuFeatures` but not used for DCT until the intrinsic port lands.
 
+### Tested / planned CPUs (live SIMD path)
+
+Live kernels today: **SSE4.2** (FDCT+quant), **SSSE3** (UYVY→planar), **SSE2** (planar→UYVY). AVX2/BMI2 may be present on the chip but are not used for DCT yet.
+
+| CPU | ISA relevant to live path | Status |
+|-----|---------------------------|--------|
+| **Intel Core i9-9900K** | SSE4.2, SSSE3, SSE2 (also AVX2+BMI2 unused) | **Verified** |
+| **Intel Mac** (x86_64 macOS) | SSE4.2 / SSSE3 / SSE2 (exact CPU TBD) | Planned |
+| **Intel Core Ultra 9 285HX** | SSE4.2, SSSE3, SSE2 (also AVX2+BMI2 unused) | Planned |
+
+Apple Silicon (ARM64) builds compile and run via the scalar fallback; NEON kernels are not live yet (CI covers `macos-latest` aarch64).
+
 ## Rayon (this crate) vs Tokio (OMT stack)
 
 `vmx` depends on **rayon only** — it does **not** depend on Tokio.

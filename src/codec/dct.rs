@@ -37,89 +37,52 @@ fn packs_i32(a: i32, b: i32) -> (i16, i16) {
 
 /// Forward DCT row transform using ftab coefficients (scalar port of SSE madd path).
 fn fdct_row(input: [i16; 8], ftab: &[i16; 32]) -> [i16; 8] {
-    // Mirror the shuffle/add/sub/madd pattern from VMX_FDCT row blocks.
-    // input layout: [x0..x7]
-    // After shuffles equivalent to: pair (x0+x7, x1+x6, x2+x5, x3+x4) and diffs.
-    let x = input;
-    // shufflehi 0b00011011 on high half then shuffle — effective butterfly on ends
-    let t0 = x[0];
-    let t1 = x[1];
-    let t2 = x[2];
-    let t3 = x[3];
-    let t4 = x[4];
-    let t5 = x[5];
-    let t6 = x[6];
-    let t7 = x[7];
+    // libvmx VMX_FDCT row block:
+    //   after butterfly + unpacklo: xmm0 = [s0,s1,d0,d1,s2,s3,d2,d3]
+    //   shuffle 0b01001110:         xmm2 = [s2,s3,d2,d3,s0,s1,d0,d1]
+    //   temp4=madd(xmm0,ftab[0..8]);  temp1=madd(xmm2,ftab[8..16]);
+    //   temp2=madd(xmm0,ftab[16..24]); temp3=madd(xmm2,ftab[24..32]);
+    //   packs(srai(temp4+temp1+rnd), srai(temp3+temp2+rnd))
+    let s0 = sat_add_i16(input[0], input[7]);
+    let d0 = sat_sub_i16(input[0], input[7]);
+    let s1 = sat_add_i16(input[1], input[6]);
+    let d1 = sat_sub_i16(input[1], input[6]);
+    let s2 = sat_add_i16(input[2], input[5]);
+    let d2 = sat_sub_i16(input[2], input[5]);
+    let s3 = sat_add_i16(input[3], input[4]);
+    let d3 = sat_sub_i16(input[3], input[4]);
 
-    // Matches: xmm0 = [t0,t1,t2,t3,t7,t6,t5,t4] after complex shuffles of in*
-    // Simplified equivalent used by IPP-style AAN row:
-    let s0 = sat_add_i16(t0, t7);
-    let d0 = sat_sub_i16(t0, t7);
-    let s1 = sat_add_i16(t1, t6);
-    let d1 = sat_sub_i16(t1, t6);
-    let s2 = sat_add_i16(t2, t5);
-    let d2 = sat_sub_i16(t2, t5);
-    let s3 = sat_add_i16(t3, t4);
-    let d3 = sat_sub_i16(t3, t4);
+    let full = [s0, s1, d0, d1, s2, s3, d2, d3];
+    let shuf = [s2, s3, d2, d3, s0, s1, d0, d1];
 
-    // unpacklo of (sums, diffs) then madd with ftab lanes
-    // xmm0 lanes after unpack: s0,d0,s1,d1  and shuffled counterpart s2,d2,s3,d3 / etc.
-    // Using exact madd pairs from ftab layout:
-    // ftab[0..8]: coeffs for even, ftab[8..16], ftab[16..24], ftab[24..32]
+    #[inline]
+    fn madd8(v: [i16; 8], f: &[i16]) -> [i32; 4] {
+        [
+            v[0] as i32 * f[0] as i32 + v[1] as i32 * f[1] as i32,
+            v[2] as i32 * f[2] as i32 + v[3] as i32 * f[3] as i32,
+            v[4] as i32 * f[4] as i32 + v[5] as i32 * f[5] as i32,
+            v[6] as i32 * f[6] as i32 + v[7] as i32 * f[7] as i32,
+        ]
+    }
+
+    let temp4 = madd8(full, &ftab[0..8]);
+    let temp1 = madd8(shuf, &ftab[8..16]);
+    let temp2 = madd8(full, &ftab[16..24]);
+    let temp3 = madd8(shuf, &ftab[24..32]);
+
     let round = RND_FRW_ROW;
-
-    // Build vectors matching SSE unpacklo_epi32(sums_diffs, shuffled):
-    // After the SSE sequence, xmm0 = [s0, s1, d0, d1] and xmm2 = [s2, s3, d2, d3] (approx).
-    // Actual SSE:
-    //   xmm0 = adds(low4, reversed_high4_as_low)
-    // We'll compute 4 madd results:
-
-    let a = [s0, s1, s2, s3, d0, d1, d2, d3];
-
-    // temp4 = madd(xmm0, ftab[0]); temp1 = madd(xmm2, ftab[8]);
-    // temp3 = madd(xmm2, ftab[24]); temp2 = madd(xmm0, ftab[16]);
-    // where xmm0=[a0,a1,a2,a3] = [s0,s1,d0,d1], xmm2=[a4,a5,a6,a7]=[s2,s3,d2,d3]
-    let madd = |v: [i16; 4], f: &[i16]| -> (i32, i32) {
-        let p0 = v[0] as i32 * f[0] as i32 + v[1] as i32 * f[1] as i32;
-        let p1 = v[2] as i32 * f[2] as i32 + v[3] as i32 * f[3] as i32;
-        (p0, p1)
-    };
-
-    // Re-derive from exact SSE shuffle result:
-    // After: xmm0 = [t0,t1,t2,t3,t0,t1,t2,t3]; xmm1 = [t7,t6,t5,t4,t7,t6,t5,t4] (conceptually)
-    // add/sub → [s0,s1,s2,s3, d0,d1,d2,d3] then unpacklo of first4 add with first4 sub...
-    let xmm0 = [s0, s1, d0, d1];
-    let xmm2 = [s2, s3, d2, d3];
-
-    let (t4a, t4b) = madd(xmm0, &ftab[0..4]);
-    let (t1a, t1b) = madd(xmm2, &ftab[8..12]);
-    let (t3a, t3b) = madd(xmm2, &ftab[24..28]);
-    let (t2a, t2b) = madd(xmm0, &ftab[16..20]);
-
-    // Also need second pair of madds for the other 4 outputs - SSE does two i32 pairs then packs.
-    // Extend with remaining ftab lanes for full 8 outputs:
-    let (t4c, t4d) = madd(xmm0, &ftab[4..8]);
-    let (t1c, t1d) = madd(xmm2, &ftab[12..16]);
-    let (t3c, t3d) = madd(xmm2, &ftab[28..32]);
-    let (t2c, t2d) = madd(xmm0, &ftab[20..24]);
-
-    let r0 = t4a + t1a + round;
-    let r1 = t4b + t1b + round;
-    let r2 = t3a + t2a + round;
-    let r3 = t3b + t2b + round;
-    let r4 = t4c + t1c + round;
-    let r5 = t4d + t1d + round;
-    let r6 = t3c + t2c + round;
-    let r7 = t3d + t2d + round;
-
     let shift = SHIFT_FRW_ROW;
-    let (o0, o1) = packs_i32(r0 >> shift, r1 >> shift);
-    let (o2, o3) = packs_i32(r2 >> shift, r3 >> shift);
-    let (o4, o5) = packs_i32(r4 >> shift, r5 >> shift);
-    let (o6, o7) = packs_i32(r6 >> shift, r7 >> shift);
-    // SSE packs_epi32(xmm0, xmm2) where xmm0=[r0,r1], xmm2=[r2,r3] giving [o0,o1,o2,o3]
-    // and the second half similarly — layout [even..., odd...]
-    let _ = a;
+    let mut lo = [0i32; 4];
+    let mut hi = [0i32; 4];
+    for i in 0..4 {
+        lo[i] = (temp4[i] + temp1[i] + round) >> shift;
+        hi[i] = (temp3[i] + temp2[i] + round) >> shift;
+    }
+
+    let (o0, o1) = packs_i32(lo[0], lo[1]);
+    let (o2, o3) = packs_i32(lo[2], lo[3]);
+    let (o4, o5) = packs_i32(hi[0], hi[1]);
+    let (o6, o7) = packs_i32(hi[2], hi[3]);
     [o0, o1, o2, o3, o4, o5, o6, o7]
 }
 
@@ -253,6 +216,11 @@ pub fn fdct_quant_zig(
 }
 
 fn spatial_quant(v: i16, encode_matrix: &[u16], i: usize) -> i16 {
+    // Match libvmx `_mm_sign_epi16(quantized, original)`: a zero source lane
+    // forces a zero coefficient even if correction/reciprocal would be nonzero.
+    if v == 0 {
+        return 0;
+    }
     let abs_v = v.unsigned_abs();
     let c = encode_matrix[i];
     let recip = encode_matrix[i + 64];

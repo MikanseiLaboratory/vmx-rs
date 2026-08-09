@@ -208,11 +208,12 @@ impl SliceData {
         if val != 0 {
             let input = (get_2mag_sign(val) as u32).wrapping_add(1);
             self.bits_left -= golomb_code_length(input) as i32;
-            let t = (input as u64) << self.bits_left;
+            // Match libvmx: BitsLeft may briefly go negative; x86 masks the shift count.
+            let t = (input as u64).wrapping_shl(self.bits_left as u32);
             self.temp |= t;
         } else {
             self.bits_left -= 2;
-            let t = 3u64 << self.bits_left;
+            let t = 3u64.wrapping_shl(self.bits_left as u32);
             self.temp |= t;
         }
     }
@@ -224,7 +225,7 @@ impl SliceData {
             let idx = self.bits_left.clamp(0, 64) as usize;
             self.temp |= BITS_LEFT_LOOKUP[idx];
             self.bits_left -= (bc + bc) as i32;
-            let t = (*num_zeros as u64) << self.bits_left;
+            let t = (*num_zeros as u64).wrapping_shl(self.bits_left as u32);
             self.temp |= t;
             *num_zeros = 0;
         }
@@ -234,13 +235,13 @@ impl SliceData {
     pub fn encode_zeros_small(&mut self, nz: u64) {
         let zero_lut = GOLOMB_ZERO_CODE_LUT[nz as usize];
         self.bits_left -= zero_lut.length as i32;
-        self.temp |= zero_lut.value << self.bits_left;
+        self.temp |= zero_lut.value.wrapping_shl(self.bits_left as u32);
     }
 
     #[inline]
     pub fn encode_value(&mut self, input: u32) {
         self.bits_left -= golomb_code_length(input) as i32;
-        let t = (input as u64) << self.bits_left;
+        let t = (input as u64).wrapping_shl(self.bits_left as u32);
         self.temp |= t;
     }
 

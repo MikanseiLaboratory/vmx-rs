@@ -16,7 +16,7 @@ pub fn encode_plane(
     #[cfg(target_arch = "aarch64")]
     {
         // NEON is baseline on aarch64.
-        return encode_plane_scalar(plane, dc, ac, encode_matrix, dc_shift, temp_block);
+        encode_plane_scalar(plane, dc, ac, encode_matrix, dc_shift, temp_block);
     }
     #[cfg(not(target_arch = "aarch64"))]
     encode_plane_scalar(plane, dc, ac, encode_matrix, dc_shift, temp_block);
@@ -32,7 +32,7 @@ pub fn decode_plane(
 ) {
     #[cfg(target_arch = "aarch64")]
     {
-        return decode_plane_scalar(plane, dc, ac, decode_matrix, dc_shift, temp_block);
+        decode_plane_scalar(plane, dc, ac, decode_matrix, dc_shift, temp_block);
     }
     #[cfg(not(target_arch = "aarch64"))]
     decode_plane_scalar(plane, dc, ac, decode_matrix, dc_shift, temp_block);

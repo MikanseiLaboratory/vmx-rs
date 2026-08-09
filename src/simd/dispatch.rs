@@ -25,12 +25,12 @@ impl CpuFeatures {
         }
         #[cfg(target_arch = "aarch64")]
         {
-            return Self {
+            Self {
                 sse42: false,
                 avx2: false,
                 bmi2: false,
                 neon: true,
-            };
+            }
         }
         #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
         {

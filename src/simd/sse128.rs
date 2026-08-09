@@ -65,6 +65,8 @@ unsafe fn fdct_row_sse(input: __m128i, ftab: &[i16; 32]) -> __m128i {
 /// Forward DCT, quantization and zigzag scan using the SSE4.2 implementation
 /// from `VMX_FDCT_8X8_QUANT_ZIG_128`.
 ///
+/// `pub` for Criterion via `vmx::kernels` (not part of the intended public API).
+///
 /// # Safety
 /// The caller must have detected SSE4.2 and provide at least eight readable
 /// bytes at each `src + row * stride`, plus 192 readable `u16`s at `matrix`.

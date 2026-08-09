@@ -31,7 +31,8 @@ pub fn select_yuv_rgb(cs: ColorSpace, height: i32) -> &'static [i16; 5] {
     }
 }
 
-pub fn uyvy_to_planar(
+/// Runtime-dispatched UYVY → planar. `pub(crate)` for `Codec` encode paths.
+pub(crate) fn uyvy_to_planar(
     src: &[u8],
     stride: usize,
     y: &mut [u8],
@@ -54,7 +55,10 @@ pub fn uyvy_to_planar(
     uyvy_to_planar_scalar(src, stride, y, y_stride, u, u_stride, v, v_stride, size);
 }
 
-fn uyvy_to_planar_scalar(
+/// Scalar UYVY → planar.
+///
+/// `pub` so Criterion can call it via `vmx::kernels` (benches are a separate crate).
+pub fn uyvy_to_planar_scalar(
     src: &[u8],
     stride: usize,
     y: &mut [u8],
@@ -84,9 +88,10 @@ fn uyvy_to_planar_scalar(
     }
 }
 
+/// SSSE3 UYVY → planar. `pub` for Criterion via `vmx::kernels` (not a stable API).
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "ssse3")]
-unsafe fn uyvy_to_planar_ssse3(
+pub unsafe fn uyvy_to_planar_ssse3(
     src: &[u8],
     stride: usize,
     y: &mut [u8],
@@ -154,7 +159,8 @@ unsafe fn uyvy_to_planar_ssse3(
     }
 }
 
-pub fn planar_to_uyvy(
+/// Runtime-dispatched planar → UYVY. `pub(crate)` for `Codec` decode paths.
+pub(crate) fn planar_to_uyvy(
     y: &[u8],
     y_stride: usize,
     u: &[u8],
@@ -176,7 +182,8 @@ pub fn planar_to_uyvy(
     planar_to_uyvy_scalar(y, y_stride, u, u_stride, v, v_stride, dst, stride, size);
 }
 
-fn planar_to_uyvy_scalar(
+/// Scalar planar → UYVY. `pub` for Criterion via `vmx::kernels` (not a stable API).
+pub fn planar_to_uyvy_scalar(
     y: &[u8],
     y_stride: usize,
     u: &[u8],
@@ -205,9 +212,10 @@ fn planar_to_uyvy_scalar(
     }
 }
 
+/// SSE2 planar → UYVY. `pub` for Criterion via `vmx::kernels` (not a stable API).
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "sse2")]
-unsafe fn planar_to_uyvy_sse2(
+pub unsafe fn planar_to_uyvy_sse2(
     y: &[u8],
     y_stride: usize,
     u: &[u8],

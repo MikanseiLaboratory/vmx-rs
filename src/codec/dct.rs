@@ -179,6 +179,8 @@ fn fdct_column_stage(in_rows: [[i16; 8]; 8]) -> [[i16; 8]; 8] {
 }
 
 /// FDCT + quantize + zigzag. Writes 64 coefficients into `out` in zigzag order.
+///
+/// `pub` for encode and Criterion via `vmx::kernels` (not a stable API surface).
 pub fn fdct_quant_zig(
     src: &[u8],
     stride: usize,

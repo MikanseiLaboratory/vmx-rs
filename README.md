@@ -46,6 +46,8 @@ Pure Rust [VMX1](https://github.com/openmediatransport/libvmx) video codec.
 | **AVX2 + BMI2** | DCT (libvmx path) | Stub → scalar | [ ] |
 | **NEON** | ARM64 kernels | Stub → scalar | [ ] |
 
+Measured scalar vs SIMD timings (i9-9900K): see **[BENCHMARK.md](BENCHMARK.md)** (~11× SSSE3 convert, ~14× SSE2 convert, ~3.4× SSE4.2 FDCT).
+
 ## Usage
 
 ```rust
@@ -69,6 +71,7 @@ dec.decode_uyvy(&mut out, stride)?;
 
 ```bash
 cargo test
+cargo bench --bench simd_paths
 cargo bench --bench encode_decode
 RUSTFLAGS="-C target-cpu=native" cargo build --profile release-fast
 ```

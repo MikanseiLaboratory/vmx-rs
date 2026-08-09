@@ -44,17 +44,31 @@ Status of hot-path kernels compared to
 
 Runtime feature checks use `is_x86_feature_detected!` (SSE4.2 for FDCT, SSSE3/SSE2 for UYVY). AVX2 is detected and recorded on `CpuFeatures` but not used for DCT until the intrinsic port lands.
 
-### Tested / planned CPUs (live SIMD path)
+### SIMD instruction-family checklist
 
-Live kernels today: **SSE4.2** (FDCT+quant), **SSSE3** (UYVY→planar), **SSE2** (planar→UYVY). AVX2/BMI2 may be present on the chip but are not used for DCT yet.
+Checklist is by **ISA family** (not CPU model). Hosts used for verification are footnotes.
 
-| CPU | ISA relevant to live path | Status |
-|-----|---------------------------|--------|
-| **Intel Core i9-9900K** | SSE4.2, SSSE3, SSE2 (also AVX2+BMI2 unused) | **Verified** |
-| **Intel Mac** (x86_64 macOS) | SSE4.2 / SSSE3 / SSE2 (exact CPU TBD) | Planned |
-| **Intel Core Ultra 9 285HX** | SSE4.2, SSSE3, SSE2 (also AVX2+BMI2 unused) | Planned |
+| Instruction family | Role in vmx-rs | Status vs scalar oracle | Verified |
+|--------------------|----------------|-------------------------|----------|
+| **SSE2** | `planar_to_uyvy` | **Live** | [x] (`color::convert` SSE2↔scalar) |
+| **SSSE3** | `uyvy_to_planar` | **Live** | [x] (`color::convert` SSSE3↔scalar) |
+| **SSE4.2** | FDCT + quant + zigzag encode | **Live** | [x] (`simd::sse128` SSE↔scalar) |
+| **SSE4.1** | _(not dispatched)_ | — | [ ] n/a |
+| **AVX / FMA** | _(not dispatched)_ | — | [ ] n/a |
+| **AVX2 + BMI2** | Preferred path in `CpuFeatures`; DCT still scalar stub | Stub → scalar | [ ] live kernel TODO |
+| **NEON** (AArch64) | Dispatch stub | Stub → scalar | [ ] live kernel TODO |
 
-Apple Silicon (ARM64) builds compile and run via the scalar fallback; NEON kernels are not live yet (CI covers `macos-latest` aarch64).
+Integration: UYVY encode/decode smoke + public convert roundtrip also pass on the verification host (exercises the live SSE stack end-to-end).
+
+**Verification hosts**
+
+| Host | Notes |
+|------|--------|
+| Intel Core i9-9900K | **Done** — SSE2/SSSE3/SSE4.2/AVX2/BMI2 all present; live rows above checked here |
+| Intel Mac (x86_64) | Planned re-check of SSE2 / SSSE3 / SSE4.2 rows |
+| Intel Core Ultra 9 285HX | Planned re-check of SSE2 / SSSE3 / SSE4.2 (+ AVX2 stub behavior) |
+
+Apple Silicon CI (`macos-latest` aarch64) builds with scalar fallback only until NEON lands.
 
 ## Rayon (this crate) vs Tokio (OMT stack)
 

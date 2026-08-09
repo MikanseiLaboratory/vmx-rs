@@ -500,3 +500,113 @@ pub fn calculate_psnr(
     mse /= count;
     (10.0 * (255.0f64 * 255.0 / mse).log10()) as f32
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::types::Size;
+
+    fn fill_uyvy(width: i32, height: i32) -> (Vec<u8>, usize) {
+        let stride = (width as usize) * 2;
+        let mut src = vec![0u8; stride * height as usize];
+        for (i, b) in src.iter_mut().enumerate() {
+            *b = ((i * 37 + 11) % 256) as u8;
+        }
+        (src, stride)
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    #[test]
+    fn uyvy_to_planar_ssse3_matches_scalar() {
+        if !is_x86_feature_detected!("ssse3") {
+            return;
+        }
+        // Width not divisible by 32 exercises SIMD body + scalar tail.
+        let size = Size::new(80, 16);
+        let (src, stride) = fill_uyvy(size.width, size.height);
+        let y_stride = size.width as usize;
+        let u_stride = (size.width / 2) as usize;
+        let plane_len = y_stride * size.height as usize;
+        let uv_len = u_stride * size.height as usize;
+
+        let mut y_s = vec![0u8; plane_len];
+        let mut u_s = vec![0u8; uv_len];
+        let mut v_s = vec![0u8; uv_len];
+        let mut y_v = vec![0u8; plane_len];
+        let mut u_v = vec![0u8; uv_len];
+        let mut v_v = vec![0u8; uv_len];
+
+        uyvy_to_planar_scalar(
+            &src, stride, &mut y_s, y_stride, &mut u_s, u_stride, &mut v_s, u_stride, size,
+        );
+        // SAFETY: SSSE3 detected; buffers sized for `size`.
+        unsafe {
+            uyvy_to_planar_ssse3(
+                &src, stride, &mut y_v, y_stride, &mut u_v, u_stride, &mut v_v, u_stride, size,
+            );
+        }
+        assert_eq!(y_s, y_v);
+        assert_eq!(u_s, u_v);
+        assert_eq!(v_s, v_v);
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    #[test]
+    fn planar_to_uyvy_sse2_matches_scalar() {
+        if !is_x86_feature_detected!("sse2") {
+            return;
+        }
+        let size = Size::new(80, 16);
+        let y_stride = size.width as usize;
+        let u_stride = (size.width / 2) as usize;
+        let plane_len = y_stride * size.height as usize;
+        let uv_len = u_stride * size.height as usize;
+        let mut y = vec![0u8; plane_len];
+        let mut u = vec![0u8; uv_len];
+        let mut v = vec![0u8; uv_len];
+        for (i, b) in y.iter_mut().enumerate() {
+            *b = ((i * 13) % 256) as u8;
+        }
+        for (i, b) in u.iter_mut().enumerate() {
+            *b = ((i * 17 + 3) % 256) as u8;
+        }
+        for (i, b) in v.iter_mut().enumerate() {
+            *b = ((i * 19 + 5) % 256) as u8;
+        }
+
+        let stride = (size.width as usize) * 2;
+        let mut dst_s = vec![0u8; stride * size.height as usize];
+        let mut dst_v = vec![0u8; stride * size.height as usize];
+        planar_to_uyvy_scalar(
+            &y, y_stride, &u, u_stride, &v, u_stride, &mut dst_s, stride, size,
+        );
+        // SAFETY: SSE2 detected; buffers sized for `size`.
+        unsafe {
+            planar_to_uyvy_sse2(
+                &y, y_stride, &u, u_stride, &v, u_stride, &mut dst_v, stride, size,
+            );
+        }
+        assert_eq!(dst_s, dst_v);
+    }
+
+    #[test]
+    fn uyvy_roundtrip_via_public_api() {
+        let size = Size::new(64, 16);
+        let (src, stride) = fill_uyvy(size.width, size.height);
+        let y_stride = size.width as usize;
+        let u_stride = (size.width / 2) as usize;
+        let plane_len = y_stride * size.height as usize;
+        let uv_len = u_stride * size.height as usize;
+        let mut y = vec![0u8; plane_len];
+        let mut u = vec![0u8; uv_len];
+        let mut v = vec![0u8; uv_len];
+        uyvy_to_planar(
+            &src, stride, &mut y, y_stride, &mut u, u_stride, &mut v, u_stride, size,
+        );
+        let mut out = vec![0u8; stride * size.height as usize];
+        planar_to_uyvy(
+            &y, y_stride, &u, u_stride, &v, u_stride, &mut out, stride, size,
+        );
+        assert_eq!(src, out);
+    }
+}

@@ -8,8 +8,8 @@ mod generated {
 }
 
 pub use generated::{
-    GolombLookup, GolombZeroCode, BITS_LEFT_LOOKUP, FTAB1_128, FTAB2_128, FTAB3_128, FTAB4_128,
-    GOLOMB_LENGTH_LUT, GOLOMB_LOOKUP_LUT, GOLOMB_ZERO_CODE_LUT, QUANT_MATRIX,
+    BITS_LEFT_LOOKUP, FTAB1_128, FTAB2_128, FTAB3_128, FTAB4_128, GOLOMB_LENGTH_LUT,
+    GOLOMB_LOOKUP_LUT, GOLOMB_ZERO_CODE_LUT, GolombLookup, QUANT_MATRIX,
 };
 
 pub const QUALITY: [i32; 25] = [
@@ -18,8 +18,8 @@ pub const QUALITY: [i32; 25] = [
 
 pub const ZIGZAG: [u8; 64] = [
     0, 1, 8, 16, 9, 2, 3, 10, 17, 24, 32, 25, 18, 11, 4, 5, 12, 19, 26, 33, 40, 48, 41, 34, 27, 20,
-    13, 6, 7, 14, 21, 28, 35, 42, 49, 56, 57, 50, 43, 36, 29, 22, 15, 23, 30, 37, 44, 51, 58, 59, 52,
-    45, 38, 31, 39, 46, 53, 60, 61, 54, 47, 55, 62, 63,
+    13, 6, 7, 14, 21, 28, 35, 42, 49, 56, 57, 50, 43, 36, 29, 22, 15, 23, 30, 37, 44, 51, 58, 59,
+    52, 45, 38, 31, 39, 46, 53, 60, 61, 54, 47, 55, 62, 63,
 ];
 
 pub const ZIGZAG_INV: [u8; 64] = [
@@ -139,6 +139,46 @@ pub const FDCT_TAN2: i16 = 27146;
 /// Intentional u16 wrap of tan(3π/16)−1
 pub const FDCT_TAN3: i16 = -21746; // 43790 as i16
 pub const FDCT_SQRT2: i16 = 23170;
+
+// IDCT column-pass constants (`tg_*_16_128` / `cos_4_16_128` in vmxcodec_x86.cpp)
+pub const IDCT_TG1: i16 = 13036;
+pub const IDCT_TG2: i16 = 27146;
+pub const IDCT_TG3: i16 = -21746;
+pub const IDCT_COS4: i16 = -19195;
+
+/// IDCT row tables for rows 0 and 4 (`tab_i_04_128`).
+pub const TAB_I_04: [i16; 32] = [
+    16384, 21407, 16384, 8867, 16384, -8867, 16384, -21407, 16384, 8867, -16384, -21407, -16384,
+    21407, 16384, -8867, 22725, 19266, 19266, -4520, 12873, -22725, 4520, -12873, 12873, 4520,
+    -22725, -12873, 4520, 19266, 19266, -22725,
+];
+
+/// IDCT row tables for rows 1 and 7 (`tab_i_17_128`).
+pub const TAB_I_17: [i16; 32] = [
+    22725, 29692, 22725, 12299, 22725, -12299, 22725, -29692, 22725, 12299, -22725, -29692, -22725,
+    29692, 22725, -12299, 31521, 26722, 26722, -6270, 17855, -31521, 6270, -17855, 17855, 6270,
+    -31521, -17855, 6270, 26722, 26722, -31521,
+];
+
+/// IDCT row tables for rows 2 and 6 (`tab_i_26_128`).
+pub const TAB_I_26: [i16; 32] = [
+    21407, 27969, 21407, 11585, 21407, -11585, 21407, -27969, 21407, 11585, -21407, -27969, -21407,
+    27969, 21407, -11585, 29692, 25172, 25172, -5906, 16819, -29692, 5906, -16819, 16819, 5906,
+    -29692, -16819, 5906, 25172, 25172, -29692,
+];
+
+/// IDCT row tables for rows 3 and 5 (`tab_i_35_128`).
+pub const TAB_I_35: [i16; 32] = [
+    19266, 25172, 19266, 10426, 19266, -10426, 19266, -25172, 19266, 10426, -19266, -25172, -19266,
+    25172, 19266, -10426, 26722, 22654, 22654, -5315, 15137, -26722, 5315, -15137, 15137, 5315,
+    -26722, -15137, 5315, 22654, 22654, -26722,
+];
+
+/// Row-table selection per block row, mirroring the `a0..a7` dispatch in
+/// `VMX_ZIG_INVQUANTIZE_IDCT_8X8_128`.
+pub const IDCT_ROW_TABLES: [&[i16; 32]; 8] = [
+    &TAB_I_04, &TAB_I_17, &TAB_I_26, &TAB_I_35, &TAB_I_04, &TAB_I_35, &TAB_I_26, &TAB_I_17,
+];
 
 #[inline]
 pub fn golomb_code_length(input: u32) -> u32 {

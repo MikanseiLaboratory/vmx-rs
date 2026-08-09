@@ -16,12 +16,12 @@ impl CpuFeatures {
             let avx2 = is_x86_feature_detected!("avx2");
             let bmi2 = is_x86_feature_detected!("bmi2");
             // Match libvmx: AVX2 path requires both AVX2 and BMI2.
-            return Self {
+            Self {
                 sse42,
                 avx2: avx2 && bmi2,
                 bmi2,
                 neon: false,
-            };
+            }
         }
         #[cfg(target_arch = "aarch64")]
         {

@@ -6,7 +6,7 @@
 #![allow(dead_code)]
 
 use crate::bitstream::SliceData;
-use crate::codec::plane::{decode_plane_scalar, encode_plane_scalar, PlaneView};
+use crate::codec::plane::{PlaneView, decode_plane_scalar, encode_plane_scalar};
 
 /// Encode using SSE128 when available; falls back to scalar.
 pub fn encode_plane(

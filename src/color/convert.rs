@@ -1,6 +1,6 @@
 //! Color conversion between packed formats and internal planar 4:2:2(:4).
 
-use crate::tables::{ShortRgb, RGB_YUV_601, RGB_YUV_709, YUV_RGB_601, YUV_RGB_709};
+use crate::tables::{RGB_YUV_601, RGB_YUV_709, ShortRgb, YUV_RGB_601, YUV_RGB_709};
 use crate::types::{ColorSpace, Size};
 
 pub fn select_rgb_yuv(cs: ColorSpace, height: i32) -> &'static [ShortRgb; 3] {
@@ -180,21 +180,13 @@ pub fn bgra_to_yuv4224(
                 let g = s[o + 1] as i32;
                 let r = s[o + 2] as i32;
                 ad[px + i] = s[o + 3];
-                let yi = (table[0].r as i32 * r
-                    + table[0].g as i32 * g
-                    + table[0].b as i32 * b
-                    + 128)
-                    >> 8;
+                let yi =
+                    (table[0].r as i32 * r + table[0].g as i32 * g + table[0].b as i32 * b + 128)
+                        >> 8;
                 yd[px + i] = yi.clamp(0, 255) as u8;
-                uy += (table[1].r as i32 * r
-                    + table[1].g as i32 * g
-                    + table[1].b as i32 * b
-                    + 128)
+                uy += (table[1].r as i32 * r + table[1].g as i32 * g + table[1].b as i32 * b + 128)
                     >> 8;
-                vv += (table[2].r as i32 * r
-                    + table[2].g as i32 * g
-                    + table[2].b as i32 * b
-                    + 128)
+                vv += (table[2].r as i32 * r + table[2].g as i32 * g + table[2].b as i32 * b + 128)
                     >> 8;
             }
             ud[x] = ((uy / 2) + 128).clamp(0, 255) as u8;
@@ -234,9 +226,7 @@ pub fn yuv4224_to_bgra(
                 let yy = yd[px + i] as i32;
                 let y_term = (table[0] as i32 * (yy - 16)) >> 14;
                 let r = y_term + ((table[1] as i32 * cr) >> 14);
-                let g = y_term
-                    - ((table[2] as i32 * cb) >> 14)
-                    - ((table[3] as i32 * cr) >> 14);
+                let g = y_term - ((table[2] as i32 * cb) >> 14) - ((table[3] as i32 * cr) >> 14);
                 let b = y_term + ((table[4] as i32 * cb) >> 13); // B was halved
                 let o = (px + i) * 4;
                 d[o] = b.clamp(0, 255) as u8;
@@ -319,7 +309,13 @@ pub fn yv12_to_planar(
     }
 }
 
-pub fn calculate_psnr(a: &[u8], b: &[u8], stride: usize, bytes_per_pixel: usize, size: Size) -> f32 {
+pub fn calculate_psnr(
+    a: &[u8],
+    b: &[u8],
+    stride: usize,
+    bytes_per_pixel: usize,
+    size: Size,
+) -> f32 {
     let mut mse = 0f64;
     let mut count = 0f64;
     for y in 0..size.height as usize {

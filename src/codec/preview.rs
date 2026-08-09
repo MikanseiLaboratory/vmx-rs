@@ -5,11 +5,7 @@ use crate::codec::dct::broadcast_dc;
 use crate::codec::plane::PlaneView;
 use crate::types::SLICE_HEIGHT;
 
-pub fn decode_plane_preview(
-    plane: &mut PlaneView<'_>,
-    dc: &mut SliceData,
-    dc_shift: i32,
-) {
+pub fn decode_plane_preview(plane: &mut PlaneView<'_>, dc: &mut SliceData, dc_shift: i32) {
     let height = SLICE_HEIGHT as usize;
     let add_val: i16 = if plane.index == 0 || plane.index == 3 {
         128

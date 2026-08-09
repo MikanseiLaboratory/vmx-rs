@@ -1,6 +1,6 @@
 //! Plane encode/decode orchestration (scalar path).
 
-use crate::bitstream::{get_2mag_sign, get_int_from_2mag_sign, SliceData};
+use crate::bitstream::{SliceData, get_2mag_sign, get_int_from_2mag_sign};
 use crate::codec::dct::{broadcast_dc, fdct_quant_zig, zig_invquant_idct};
 use crate::types::SLICE_HEIGHT;
 
@@ -55,8 +55,8 @@ pub fn encode_plane_scalar(
 
             // Build nonzero mask (skip DC bit 0)
             let mut m_index: u64 = 0;
-            for i in 1..64 {
-                if temp_block[i] != 0 {
+            for (i, coeff) in temp_block.iter().enumerate().skip(1) {
+                if *coeff != 0 {
                     m_index |= 1u64 << i;
                 }
             }
@@ -137,7 +137,7 @@ pub fn decode_plane_scalar(
     for y in (0..height).step_by(8) {
         for x in (0..stride).step_by(8) {
             temp_block.fill(0);
-            let mut valid = terms_to_decode < 64;
+            let valid = terms_to_decode < 64;
 
             while terms_to_decode < 64 {
                 let l = ac.peek_golomb_lookup();

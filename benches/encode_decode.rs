@@ -1,4 +1,4 @@
-use criterion::{criterion_group, criterion_main, Criterion};
+use criterion::{Criterion, criterion_group, criterion_main};
 use vmx::{Codec, Config, Profile};
 
 fn encode_decode_1080p(c: &mut Criterion) {

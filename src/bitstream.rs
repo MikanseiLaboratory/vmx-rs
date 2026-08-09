@@ -1,7 +1,7 @@
 //! Exp-Golomb bitstream reader/writer matching libvmx macros.
 
 use crate::tables::{
-    golomb_code_length, BITS_LEFT_LOOKUP, GOLOMB_LOOKUP_LUT, GOLOMB_ZERO_CODE_LUT,
+    BITS_LEFT_LOOKUP, GOLOMB_LOOKUP_LUT, GOLOMB_ZERO_CODE_LUT, golomb_code_length,
 };
 use crate::types::BITS_SIZE;
 
@@ -299,8 +299,8 @@ mod tests {
                 let mut bc = r.get_zeros();
                 bc += 2;
                 let val = r.get_bits(bc as u32);
-                let mut d = get_int_from_2mag_sign(val - 1);
-                d
+
+                get_int_from_2mag_sign(val - 1)
             };
             // For zero: first bit is 1 then second is 1
             // Actually EncodeDC for zero writes 3 in 2 bits = 11 binary

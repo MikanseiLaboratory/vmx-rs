@@ -2,6 +2,18 @@
 
 Pure Rust [VMX1](https://github.com/openmediatransport/libvmx) video codec.
 
+> **Disclaimer:** This is an independent, community-maintained project. It is **not** an official Open Media Transport product or repository.
+
+## Related projects
+
+| Project | Description |
+|---------|-------------|
+| [Open Media Transport (official)](https://github.com/openmediatransport) | Official OMT organization and documentation |
+| [libomt](https://github.com/openmediatransport/libomt) | Official C/C++ OMT core library |
+| [libomtnet](https://github.com/openmediatransport/libomtnet) | Official .NET OMT bindings |
+| [libvmx](https://github.com/openmediatransport/libvmx) | Official VMX1 video codec (reference implementation) |
+| [openmediatransport-rs](../openmediatransport-rs) | Pure Rust OMT protocol stack (this workspace) |
+
 ## Goals
 
 - Byte-compatible with `libvmx` (container, entropy, DCT/quant)

@@ -3,7 +3,7 @@
 #![allow(dead_code)]
 
 use crate::bitstream::SliceData;
-use crate::codec::plane::{decode_plane_scalar, encode_plane_scalar, PlaneView};
+use crate::codec::plane::{PlaneView, decode_plane_scalar, encode_plane_scalar};
 
 pub fn encode_plane(
     plane: &PlaneView<'_>,

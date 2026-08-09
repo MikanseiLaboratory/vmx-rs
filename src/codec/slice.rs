@@ -1,7 +1,7 @@
 //! Slice-parallel encode/decode.
 
 use crate::bitstream::SliceData;
-use crate::codec::plane::{decode_plane_scalar, encode_plane_scalar, PlaneView};
+use crate::codec::plane::{PlaneView, decode_plane_scalar, encode_plane_scalar};
 use crate::thread_pool::ThreadPool;
 use crate::types::SLICE_HEIGHT;
 
@@ -39,7 +39,9 @@ impl SliceSet {
 pub struct PlaneBuffers {
     pub data: [Vec<u8>; 4],
     pub stride: [usize; 4],
+    #[allow(dead_code)]
     pub width: [i32; 4],
+    #[allow(dead_code)]
     pub height: [i32; 4],
 }
 

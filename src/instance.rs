@@ -1,20 +1,21 @@
 //! Codec instance — create, encode, decode, container I/O.
 
 use crate::bitrate::{adjust_bitrate, lookup_bitrate};
-use crate::codec::slice::{decode_slices, encode_slices, PlaneBuffers, SliceSet};
+use crate::codec::slice::{PlaneBuffers, SliceSet, decode_slices, encode_slices};
 use crate::color::convert::{
-    bgra_to_yuv4224, calculate_psnr, planar_to_uyvy, planar_to_yuy2, select_rgb_yuv, select_yuv_rgb,
-    uyvy_to_planar, yuy2_to_planar, yuv4224_to_bgra, nv12_to_planar, yv12_to_planar,
+    bgra_to_yuv4224, calculate_psnr, nv12_to_planar, planar_to_uyvy, planar_to_yuy2,
+    select_rgb_yuv, select_yuv_rgb, uyvy_to_planar, yuv4224_to_bgra, yuy2_to_planar,
+    yv12_to_planar,
 };
 use crate::container::{encoded_preview_length, parse_and_load, save_to};
 use crate::error::{Result, VmxError};
 use crate::simd::dispatch::CpuFeatures;
-use crate::tables::{QUANT_MATRIX, QUALITY};
+use crate::tables::{QUALITY, QUANT_MATRIX};
 use crate::thread_pool::ThreadPool;
 use crate::types::{
-    align_up, ColorSpace, Format, ImageFormat, Profile, Size, ALIGNMENT, DECODE_MATRIX_COUNT,
-    ENCODE_MATRIX_COUNT, MAX_HEIGHT, MAX_Q, MAX_WIDTH, MIN_HEIGHT, MIN_WIDTH, QUALITY_COUNT,
-    SLICE_HEIGHT,
+    ALIGNMENT, ColorSpace, DECODE_MATRIX_COUNT, ENCODE_MATRIX_COUNT, Format, ImageFormat,
+    MAX_HEIGHT, MAX_Q, MAX_WIDTH, MIN_HEIGHT, MIN_WIDTH, Profile, QUALITY_COUNT, SLICE_HEIGHT,
+    Size, align_up,
 };
 
 #[derive(Debug, Clone)]
@@ -46,6 +47,7 @@ impl Default for Config {
 pub struct Codec {
     size: Size,
     format: Format,
+    #[allow(dead_code)]
     profile: Profile,
     color_space: ColorSpace,
     quality: i32,
@@ -58,6 +60,7 @@ pub struct Codec {
     planes: PlaneBuffers,
     slices: Vec<SliceSet>,
     slice_count: usize,
+    #[allow(dead_code)]
     aligned_height: i32,
     target_bytes_min: i32,
     target_bytes_max: i32,
@@ -75,7 +78,8 @@ impl Codec {
             mut color_space,
         } = config;
 
-        if width < MIN_WIDTH || width > MAX_WIDTH || height < MIN_HEIGHT || height > MAX_HEIGHT {
+        if !(MIN_WIDTH..=MAX_WIDTH).contains(&width) || !(MIN_HEIGHT..=MAX_HEIGHT).contains(&height)
+        {
             return Err(VmxError::UnsupportedDimensions { width, height });
         }
         if width % 2 != 0 {
@@ -106,20 +110,20 @@ impl Codec {
         }
 
         let mut y_stride = width as usize;
-        let mut uv_w = (width / 2) as usize;
+        let uv_w = (width / 2) as usize;
         let mut uv_stride = uv_w;
         y_stride = align_up(y_stride as i32, 8) as usize;
         uv_stride = align_up(uv_stride as i32, 8) as usize;
-        if uv_w % 16 != 0 {
+        if !uv_w.is_multiple_of(16) {
             features.avx2 = false;
         }
 
         let aligned_height = align_up(height, 16);
         let plane_len = y_stride * aligned_height as usize * 2;
-        let mut y = vec![0u8; plane_len];
-        let mut u = vec![128u8; plane_len];
-        let mut v = vec![128u8; plane_len];
-        let mut a = vec![255u8; plane_len];
+        let y = vec![0u8; plane_len];
+        let u = vec![128u8; plane_len];
+        let v = vec![128u8; plane_len];
+        let a = vec![255u8; plane_len];
 
         let slice_count = (aligned_height >> 4) as usize;
         let dc_len = y_stride * SLICE_HEIGHT as usize * 2;
@@ -137,8 +141,7 @@ impl Codec {
             s.pixel_height_interlaced = SLICE_HEIGHT;
             let mid = slice_count / 2;
             if (mid > 0 && i == mid - 1) || i == slice_count - 1 {
-                s.pixel_height_interlaced =
-                    SLICE_HEIGHT - ((aligned_height - height) >> 1);
+                s.pixel_height_interlaced = SLICE_HEIGHT - ((aligned_height - height) >> 1);
             }
             s.lower_field = i >= slice_count / 2;
             s.offset = offsets;
@@ -156,14 +159,14 @@ impl Codec {
 
         let mut decode_presets = Vec::with_capacity(QUALITY_COUNT);
         let mut encode_presets = Vec::with_capacity(QUALITY_COUNT);
-        for i in 0..QUALITY_COUNT {
+        for &quality_scale in QUALITY.iter().take(QUALITY_COUNT) {
             let mut dec = vec![0u16; DECODE_MATRIX_COUNT];
             let mut enc = vec![0u16; ENCODE_MATRIX_COUNT];
             for y in 0..DECODE_MATRIX_COUNT {
                 dec[y] = if y == 0 {
                     QUANT_MATRIX[0]
                 } else {
-                    QUANT_MATRIX[y].wrapping_mul(QUALITY[i] as u16)
+                    QUANT_MATRIX[y].wrapping_mul(quality_scale as u16)
                 };
                 let rc = create_reciprocal(dec[y]);
                 enc[y] = rc[0];
@@ -248,9 +251,9 @@ impl Codec {
 
     fn set_quality_internal(&mut self, mut q: i32) {
         let mut index = 0;
-        for i in 0..QUALITY_COUNT {
-            if QUALITY[i] >= (100 - q) {
-                q = 100 - QUALITY[i];
+        for (i, &quality_scale) in QUALITY.iter().enumerate().take(QUALITY_COUNT) {
+            if quality_scale >= (100 - q) {
+                q = 100 - quality_scale;
                 index = i;
                 break;
             }
@@ -281,14 +284,6 @@ impl Codec {
         self.dc_shift = dc_shift;
     }
 
-    fn encode_matrix(&self) -> &[u16] {
-        &self.encode_presets[self.decode_matrix_idx]
-    }
-
-    fn decode_matrix(&self) -> &[u16] {
-        &self.decode_presets[self.decode_matrix_idx]
-    }
-
     fn encode_planes(&mut self) {
         let plane_count = match self.image_format {
             ImageFormat::Bgra | ImageFormat::Bgrx | ImageFormat::Uyva | ImageFormat::Pa16 => 4,
@@ -313,13 +308,7 @@ impl Codec {
     }
 
     pub fn save_to(&mut self, dst: &mut [u8]) -> Result<usize> {
-        let len = save_to(
-            dst,
-            &self.slices,
-            self.format,
-            self.quality,
-            self.dc_shift,
-        )?;
+        let len = save_to(dst, &self.slices, self.format, self.quality, self.dc_shift)?;
         adjust_bitrate(
             &mut self.quality,
             self.min_quality,
@@ -439,18 +428,8 @@ impl Codec {
         let (u, rest) = rest.split_at_mut(1);
         let (v, a) = rest.split_at_mut(1);
         bgra_to_yuv4224(
-            src,
-            stride,
-            &mut y[0],
-            stride_y,
-            &mut u[0],
-            stride_u,
-            &mut v[0],
-            stride_v,
-            &mut a[0],
-            stride_a,
-            size,
-            table,
+            src, stride, &mut y[0], stride_y, &mut u[0], stride_u, &mut v[0], stride_v, &mut a[0],
+            stride_a, size, table,
         );
         self.encode_planes();
         // Also encode alpha plane — currently encode_slices encodes all 4; OK
@@ -569,8 +548,8 @@ impl Codec {
         let a_off = stride * self.size.height as usize;
         for row in 0..self.size.height as usize {
             let src_row = &src[a_off + row * self.size.width as usize..];
-            let dst = &mut self.planes.data[3]
-                [row * self.planes.stride[3]..row * self.planes.stride[3] + self.size.width as usize];
+            let dst = &mut self.planes.data[3][row * self.planes.stride[3]
+                ..row * self.planes.stride[3] + self.size.width as usize];
             dst.copy_from_slice(&src_row[..self.size.width as usize]);
         }
         // Re-encode including alpha — call encode_planes again
@@ -582,8 +561,8 @@ impl Codec {
         self.decode_uyvy(dst, stride)?;
         let a_off = stride * self.size.height as usize;
         for row in 0..self.size.height as usize {
-            let src = &self.planes.data[3]
-                [row * self.planes.stride[3]..row * self.planes.stride[3] + self.size.width as usize];
+            let src = &self.planes.data[3][row * self.planes.stride[3]
+                ..row * self.planes.stride[3] + self.size.width as usize];
             dst[a_off + row * self.size.width as usize
                 ..a_off + row * self.size.width as usize + self.size.width as usize]
                 .copy_from_slice(src);
@@ -654,7 +633,11 @@ impl Codec {
                     stride: self.planes.stride[pi],
                     offset: slice.offset[pi],
                 };
-                crate::codec::preview::decode_plane_preview(&mut view, &mut slice.dc, self.dc_shift);
+                crate::codec::preview::decode_plane_preview(
+                    &mut view,
+                    &mut slice.dc,
+                    self.dc_shift,
+                );
             }
         }
         // Nearest-neighbor 1/8 subsample to dst

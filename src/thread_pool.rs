@@ -38,6 +38,7 @@ impl ThreadPool {
         self.thread_count
     }
 
+    #[allow(dead_code)]
     pub fn execute<F>(&self, job: F)
     where
         F: FnOnce() + Send + 'static,

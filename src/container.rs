@@ -7,6 +7,7 @@ use crate::types::{CodecFormat, Format};
 pub struct FrameHeader {
     pub format: Format,
     pub quality: i32,
+    #[allow(dead_code)]
     pub slice_count: usize,
     pub dc_shift: i32,
 }
@@ -61,7 +62,7 @@ pub fn parse_and_load(
     };
 
     let mut b = offset + 3;
-    for i in 0..slice_count {
+    for slice in slices.iter_mut().take(slice_count) {
         if b + 4 > data.len() {
             return Err(VmxError::BufferOverflow);
         }
@@ -70,17 +71,17 @@ pub fn parse_and_load(
         if b + len > data.len() {
             return Err(VmxError::BufferOverflow);
         }
-        if len > slices[i].dc.max_length {
+        if len > slice.dc.max_length {
             return Err(VmxError::BufferOverflow);
         }
-        slices[i].dc.stream[..len].copy_from_slice(&data[b..b + len]);
-        slices[i].dc.stream_length = len;
-        slices[i].dc.pos = len;
+        slice.dc.stream[..len].copy_from_slice(&data[b..b + len]);
+        slice.dc.stream_length = len;
+        slice.dc.pos = len;
         b += len;
     }
 
     if b < data.len() {
-        for i in 0..slice_count {
+        for slice in slices.iter_mut().take(slice_count) {
             if b + 4 > data.len() {
                 return Err(VmxError::BufferOverflow);
             }
@@ -89,12 +90,12 @@ pub fn parse_and_load(
             if b + len > data.len() {
                 return Err(VmxError::BufferOverflow);
             }
-            if len > slices[i].ac.max_length {
+            if len > slice.ac.max_length {
                 return Err(VmxError::BufferOverflow);
             }
-            slices[i].ac.stream[..len].copy_from_slice(&data[b..b + len]);
-            slices[i].ac.stream_length = len;
-            slices[i].ac.pos = len;
+            slice.ac.stream[..len].copy_from_slice(&data[b..b + len]);
+            slice.ac.stream_length = len;
+            slice.ac.pos = len;
             b += len;
         }
     } else {
@@ -113,15 +114,24 @@ pub fn parse_and_load(
     })
 }
 
-pub fn save_to(dst: &mut [u8], slices: &[SliceSet], format: Format, quality: i32, dc_shift: i32) -> Result<usize> {
+pub fn save_to(
+    dst: &mut [u8],
+    slices: &[SliceSet],
+    format: Format,
+    quality: i32,
+    dc_shift: i32,
+) -> Result<usize> {
     if dst.len() < 5 {
         return Err(VmxError::BufferOverflow);
     }
-    let mut b = 0usize;
     let slice_count = slices.len();
-    let sc_byte = if slice_count == 270 { 14u8 } else { slice_count as u8 };
+    let sc_byte = if slice_count == 270 {
+        14u8
+    } else {
+        slice_count as u8
+    };
 
-    if dc_shift > 0 {
+    let mut b = if dc_shift > 0 {
         dst[0] = CodecFormat::Extended as u8;
         dst[1] = dc_shift as u8;
         dst[2] = if format == Format::Interlaced {
@@ -131,7 +141,7 @@ pub fn save_to(dst: &mut [u8], slices: &[SliceSet], format: Format, quality: i32
         };
         dst[3] = quality as u8;
         dst[4] = sc_byte;
-        b = 5;
+        5
     } else {
         dst[0] = if format == Format::Interlaced {
             CodecFormat::Interlaced as u8
@@ -140,8 +150,8 @@ pub fn save_to(dst: &mut [u8], slices: &[SliceSet], format: Format, quality: i32
         };
         dst[1] = quality as u8;
         dst[2] = sc_byte;
-        b = 3;
-    }
+        3
+    };
 
     for s in slices {
         let len = s.dc.encoded_length();
@@ -166,7 +176,12 @@ pub fn save_to(dst: &mut [u8], slices: &[SliceSet], format: Format, quality: i32
     Ok(b)
 }
 
-pub fn encoded_preview_length(slices: &[SliceSet], format: Format, quality: i32, dc_shift: i32) -> usize {
+pub fn encoded_preview_length(
+    slices: &[SliceSet],
+    format: Format,
+    quality: i32,
+    dc_shift: i32,
+) -> usize {
     let header = if dc_shift > 0 { 5 } else { 3 };
     let mut len = header;
     for s in slices {

@@ -3,7 +3,7 @@
 use crate::tables::{
     BITRATE_TABLE, BR_MINQ, BR_PROFILE, BR_RESOLUTION, BR_SHIFT, BR_TARGET, BR_THREADS,
 };
-use crate::types::{Profile, MAX_Q};
+use crate::types::{MAX_Q, Profile};
 
 pub fn calculate_bitrate(target_mbps: i32, min: bool) -> i32 {
     let mut t = target_mbps as f32;
@@ -48,7 +48,13 @@ pub fn lookup_bitrate(profile: Profile, height: i32) -> BitrateConfig {
 }
 
 /// Match `VMX_AdjustBitrate` from libvmx.
-pub fn adjust_bitrate(quality: &mut i32, min_quality: i32, frame_len: i32, target_min: i32, target_max: i32) {
+pub fn adjust_bitrate(
+    quality: &mut i32,
+    min_quality: i32,
+    frame_len: i32,
+    target_min: i32,
+    target_max: i32,
+) {
     if frame_len == 0 || target_min == 0 || target_max == 0 {
         return;
     }

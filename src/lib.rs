@@ -19,9 +19,9 @@ mod types;
 pub use error::{Result, VmxError};
 pub use instance::{Codec, Config};
 pub use types::{
-    align_up, ColorSpace, Format, ImageFormat, Profile, Size, ALIGNMENT, BITS_SIZE,
-    DECODE_MATRIX_COUNT, ENCODE_MATRIX_COUNT, MAX_HEIGHT, MAX_PLANES, MAX_Q, MAX_WIDTH, MIN_HEIGHT,
-    MIN_WIDTH, QUALITY_COUNT, SLICE_HEIGHT,
+    ALIGNMENT, BITS_SIZE, ColorSpace, DECODE_MATRIX_COUNT, ENCODE_MATRIX_COUNT, Format,
+    ImageFormat, MAX_HEIGHT, MAX_PLANES, MAX_Q, MAX_WIDTH, MIN_HEIGHT, MIN_WIDTH, Profile,
+    QUALITY_COUNT, SLICE_HEIGHT, Size, align_up,
 };
 
 /// Convenience alias matching historical naming.

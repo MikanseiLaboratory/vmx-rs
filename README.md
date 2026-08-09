@@ -19,81 +19,32 @@ Pure Rust [VMX1](https://github.com/openmediatransport/libvmx) video codec.
 - Byte-compatible with `libvmx` (container, entropy, DCT/quant)
 - No native library / FFI / runtime DLL dependency
 - Cross-platform: Windows / Linux / macOS × x86_64 / ARM64
-- Runtime SIMD dispatch where implemented (see table below)
+- Runtime SIMD dispatch where implemented
 - Slice-parallel encode/decode via [rayon](https://crates.io/crates/rayon)
 - MSRV: Rust 1.88 (edition 2024)
 
-## SIMD & parallelism vs official `libvmx`
+## SIMD vs `libvmx`
 
-Status of hot-path kernels compared to
-[`openmediatransport/libvmx`](https://github.com/openmediatransport/libvmx)
-(`vmxcodec_x86.cpp` / `vmxcodec_avx2.cpp` / `vmxcodec_arm.cpp` + `ThreadTasks`).
+| Kernel | libvmx | vmx-rs |
+|--------|--------|--------|
+| FDCT + quant (8-bit) | SSE4.2 / AVX2+BMI2 | **SSE4.2 live**; AVX2 stub → scalar |
+| FDCT + quant (10/16-bit) | SSE / AVX2 | Scalar |
+| IDCT + dequant | SSE / AVX2 | Scalar |
+| UYVY → planar | SSE (SSSE3) | **SSSE3 live** |
+| planar → UYVY | SSE | **SSE2 live** |
+| Other color formats | SSE | Scalar |
+| Slice parallelism | `ThreadTasks` | rayon (bitrate `Threads`) |
+| ARM64 | sse2neon | NEON stub → scalar |
 
-| Kernel | libvmx (official) | vmx-rs (this crate) |
-|--------|-------------------|---------------------|
-| **FDCT + quant + zigzag (8-bit)** | SSE4.2 / SSSE3 (`VMX_FDCT_8X8_QUANT_ZIG_128`); AVX2+BMI2 (`…_256`) when chroma width ÷16 | **Live:** SSE4.2 (`fdct_quant_zig_sse`). AVX2 / NEON modules exist but still call scalar |
-| **FDCT + quant (10/16-bit)** | SSE / AVX2 `…_128_16` / `…_256_16` | Scalar only |
-| **IDCT + dequant + zigzag** | SSE128 / AVX2 (`VMX_ZIG_INVQUANTIZE_IDCT_8X8_*`) | **Scalar only** (byte-compatible port in `codec/dct.rs`) |
-| **UYVY → planar** | SSE (`VMX_UYVYToPlanar`, SSSE3 shuffle) | **Live:** SSSE3 (`uyvy_to_planar_ssse3`), scalar fallback |
-| **planar → UYVY** | SSE (`VMX_PlanarToUYVY`) | **Live:** SSE2 (`planar_to_uyvy_sse2`), scalar fallback |
-| **YUY2 / NV12 / YV12 / P216 / BGRA ↔ planar** | SSE paths in libvmx | **Scalar only** |
-| **Slice parallelism** | `ThreadTasks` — N workers from bitrate table; convert+encode fused per slice | **rayon** pool sized from the same bitrate `Threads` column; full-frame convert then parallel encode/decode slices |
-| **ARM64** | SSE intrinsics via `sse2neon.h` | NEON dispatch stub → scalar (no live NEON kernels yet) |
+### Instruction-family checklist
 
-**Summary:** encode on x86_64 with SSE4.2 + SSSE3 is the path that currently matches libvmx’s *class* of acceleration (128-bit). Decode IDCT, AVX2, NEON, and most extra color formats are still behind the official library.
-
-Runtime feature checks use `is_x86_feature_detected!` (SSE4.2 for FDCT, SSSE3/SSE2 for UYVY). AVX2 is detected and recorded on `CpuFeatures` but not used for DCT until the intrinsic port lands.
-
-### SIMD instruction-family checklist
-
-Checklist is by **ISA family** (not CPU model). Hosts used for verification are footnotes.
-
-| Instruction family | Role in vmx-rs | Status vs scalar oracle | Verified |
-|--------------------|----------------|-------------------------|----------|
-| **SSE2** | `planar_to_uyvy` | **Live** | [x] (`color::convert` SSE2↔scalar) |
-| **SSSE3** | `uyvy_to_planar` | **Live** | [x] (`color::convert` SSSE3↔scalar) |
-| **SSE4.2** | FDCT + quant + zigzag encode | **Live** | [x] (`simd::sse128` SSE↔scalar) |
-| **SSE4.1** | _(not dispatched)_ | — | [ ] n/a |
-| **AVX / FMA** | _(not dispatched)_ | — | [ ] n/a |
-| **AVX2 + BMI2** | Preferred path in `CpuFeatures`; DCT still scalar stub | Stub → scalar | [ ] live kernel TODO |
-| **NEON** (AArch64) | Dispatch stub | Stub → scalar | [ ] live kernel TODO |
-
-Integration: UYVY encode/decode smoke + public convert roundtrip also pass on the verification host (exercises the live SSE stack end-to-end).
-
-**Verification hosts**
-
-| Host | Notes |
-|------|--------|
-| Intel Core i9-9900K | **Done** — SSE2/SSSE3/SSE4.2/AVX2/BMI2 all present; live rows above checked here |
-| Intel Mac (x86_64) | Planned re-check of SSE2 / SSSE3 / SSE4.2 rows |
-| Intel Core Ultra 9 285HX | Planned re-check of SSE2 / SSSE3 / SSE4.2 (+ AVX2 stub behavior) |
-
-Apple Silicon CI (`macos-latest` aarch64) builds with scalar fallback only until NEON lands.
-
-## Rayon (this crate) vs Tokio (OMT stack)
-
-`vmx` depends on **rayon only** — it does **not** depend on Tokio.
-
-| Layer | Crate | Role |
-|-------|--------|------|
-| CPU (DCT / slices) | `vmx` → **rayon** | Data-parallel work over slice bands |
-| I/O (TCP / timers) | `openmediatransport` → **tokio** (optional) | Async networking |
-
-That split is intentional and matches common Rust practice (and Tokio’s guidance): keep CPU work off the async executor; use `block_in_place` / `spawn_blocking` at the OMT boundary when calling into `vmx` from async code.
-
-Coexistence in one *process* is fine. Watch **thread oversubscription** at high thread counts (Tokio worker threads + rayon’s bitrate-sized pool). For 720p OMT profiles the pool is typically 2 threads, which is usually comfortable.
-
-## Performance notes
-
-Prefer Release builds. Optional fat LTO profile:
-
-```bash
-RUSTFLAGS="-C target-cpu=native" cargo build --profile release-fast
-```
-
-```bash
-cargo bench --bench encode_decode
-```
+| Family | Role | Status | Verified |
+|--------|------|--------|----------|
+| **SSE2** | planar → UYVY | Live | [x] |
+| **SSSE3** | UYVY → planar | Live | [x] |
+| **SSE4.2** | FDCT + quant encode | Live | [x] |
+| **AVX2 + BMI2** | DCT (libvmx path) | Stub → scalar | [ ] |
+| **NEON** | ARM64 kernels | Stub → scalar | [ ] |
 
 ## Usage
 
@@ -114,6 +65,12 @@ let len = enc.save_to(&mut buf)?;
 let mut dec = Codec::new(Config::new(1920, 1080))?;
 dec.load_from(&buf[..len])?;
 dec.decode_uyvy(&mut out, stride)?;
+```
+
+```bash
+cargo test
+cargo bench --bench encode_decode
+RUSTFLAGS="-C target-cpu=native" cargo build --profile release-fast
 ```
 
 ## License

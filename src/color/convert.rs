@@ -89,6 +89,9 @@ pub fn uyvy_to_planar_scalar(
 }
 
 /// SSSE3 UYVY → planar. `pub` for Criterion via `vmx::kernels` (not a stable API).
+///
+/// # Safety
+/// Caller must have detected SSSE3. Buffers must cover `size` with the given strides.
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "ssse3")]
 pub unsafe fn uyvy_to_planar_ssse3(
@@ -213,6 +216,9 @@ pub fn planar_to_uyvy_scalar(
 }
 
 /// SSE2 planar → UYVY. `pub` for Criterion via `vmx::kernels` (not a stable API).
+///
+/// # Safety
+/// Caller must have detected SSE2. Buffers must cover `size` with the given strides.
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "sse2")]
 pub unsafe fn planar_to_uyvy_sse2(

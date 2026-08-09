@@ -1,9 +1,7 @@
 use criterion::{Criterion, criterion_group, criterion_main};
 use vmx::{Codec, Config, Profile};
 
-fn encode_decode_1080p(c: &mut Criterion) {
-    let width = 1920i32;
-    let height = 1088i32; // aligned
+fn make_uyvy(width: i32, height: i32) -> (Vec<u8>, usize) {
     let stride = (width as usize) * 2;
     let mut frame = vec![128u8; stride * height as usize];
     for y in 0..height as usize {
@@ -15,22 +13,32 @@ fn encode_decode_1080p(c: &mut Criterion) {
             frame[o + 3] = 16;
         }
     }
+    (frame, stride)
+}
 
-    c.bench_function("vmx_encode_uyvy_1080p", |b| {
+fn encode_uyvy_profile(c: &mut Criterion, name: &str, width: i32, height: i32, profile: Profile) {
+    let (frame, stride) = make_uyvy(width, height);
+    let mut enc = Codec::new(Config {
+        width,
+        height,
+        profile,
+        color_space: Default::default(),
+    })
+    .unwrap();
+    let mut buf = vec![0u8; 8 << 20];
+
+    c.bench_function(name, |b| {
         b.iter(|| {
-            let mut enc = Codec::new(Config {
-                width,
-                height: 1080,
-                profile: Profile::OmtHq,
-                color_space: Default::default(),
-            })
-            .unwrap();
             enc.encode_uyvy(&frame, stride).unwrap();
-            let mut buf = vec![0u8; 8 << 20];
             let _ = enc.save_to(&mut buf).unwrap();
         })
     });
 }
 
-criterion_group!(benches, encode_decode_1080p);
-criterion_main!(benches);
+fn benches(c: &mut Criterion) {
+    encode_uyvy_profile(c, "vmx_encode_uyvy_720p_omt_lq", 1280, 720, Profile::OmtLq);
+    encode_uyvy_profile(c, "vmx_encode_uyvy_1080p_omt_hq", 1920, 1080, Profile::OmtHq);
+}
+
+criterion_group!(benches_group, benches);
+criterion_main!(benches_group);

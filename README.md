@@ -12,15 +12,28 @@ Pure Rust [VMX1](https://github.com/openmediatransport/libvmx) video codec.
 | [libomt](https://github.com/openmediatransport/libomt) | Official C/C++ OMT core library |
 | [libomtnet](https://github.com/openmediatransport/libomtnet) | Official .NET OMT bindings |
 | [libvmx](https://github.com/openmediatransport/libvmx) | Official VMX1 video codec (reference implementation) |
-| [openmediatransport-rs](https://github.com/MikanseiLaboratory/openmediatransport-rs) | Pure Rust OMT protocol stack
+| [openmediatransport-rs](https://github.com/MikanseiLaboratory/openmediatransport-rs) | Pure Rust OMT protocol stack |
 
 ## Goals
 
 - Byte-compatible with `libvmx` (container, entropy, DCT/quant)
 - No native library / FFI / runtime DLL dependency
 - Cross-platform: Windows / Linux / macOS × x86_64 / ARM64
-- Runtime SIMD dispatch: scalar, SSE4.2, AVX2+BMI2, NEON
+- Runtime SIMD dispatch: SSE4.2 FDCT (live), AVX2/NEON stubs, SSSE3 UYVY convert
+- Slice-parallel encode/decode via [rayon](https://crates.io/crates/rayon) (CPU pool; Tokio is for I/O — use `spawn_blocking` / `block_in_place` around the codec)
 - MSRV: Rust 1.88 (edition 2024)
+
+## Performance notes
+
+Prefer Release builds. Optional fat LTO profile:
+
+```bash
+RUSTFLAGS="-C target-cpu=native" cargo build --profile release-fast
+```
+
+```bash
+cargo bench --bench encode_decode
+```
 
 ## Usage
 

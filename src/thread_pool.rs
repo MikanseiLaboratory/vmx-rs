@@ -1,36 +1,30 @@
-//! Persistent worker thread pool for slice-parallel encode/decode.
+//! Rayon-backed CPU pool for slice-parallel encode/decode.
+//!
+//! This is **not** an async runtime. Tokio remains appropriate for I/O; use
+//! `tokio::task::spawn_blocking` (or a dedicated thread) to keep codec work off
+//! the async executor. Slice parallelism itself uses [rayon].
 
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::{self, Receiver, Sender};
-use std::sync::{Arc, Mutex};
-use std::thread::{self, JoinHandle};
+use rayon::ThreadPool as RayonPool;
+use rayon::ThreadPoolBuilder;
+use rayon::prelude::*;
 
-type Job = Box<dyn FnOnce() + Send + 'static>;
-
+/// Slice-parallelism helper sized to the bitrate table's thread count.
 pub struct ThreadPool {
-    tx: Option<Sender<Job>>,
-    workers: Vec<JoinHandle<()>>,
-    running: Arc<AtomicBool>,
+    inner: RayonPool,
     thread_count: usize,
 }
 
 impl ThreadPool {
     pub fn new(threads: usize) -> Self {
-        let threads = threads.max(1);
-        let (tx, rx) = mpsc::channel::<Job>();
-        let rx = Arc::new(Mutex::new(rx));
-        let running = Arc::new(AtomicBool::new(true));
-        let mut workers = Vec::with_capacity(threads);
-        for _ in 0..threads {
-            let rx = Arc::clone(&rx);
-            let running = Arc::clone(&running);
-            workers.push(thread::spawn(move || worker_loop(rx, running)));
-        }
+        let thread_count = threads.max(1);
+        let inner = ThreadPoolBuilder::new()
+            .num_threads(thread_count)
+            .thread_name(|i| format!("vmx-slice-{i}"))
+            .build()
+            .expect("rayon thread pool");
         Self {
-            tx: Some(tx),
-            workers,
-            running,
-            thread_count: threads,
+            inner,
+            thread_count,
         }
     }
 
@@ -38,36 +32,20 @@ impl ThreadPool {
         self.thread_count
     }
 
-    #[allow(dead_code)]
-    pub fn execute<F>(&self, job: F)
+    /// Apply `f` to disjoint mutable chunks of `items` on this pool.
+    pub fn parallel_chunks_mut<T, F>(&self, items: &mut [T], f: F)
     where
-        F: FnOnce() + Send + 'static,
+        T: Send,
+        F: Fn(&mut [T]) + Sync,
     {
-        if let Some(tx) = &self.tx {
-            let _ = tx.send(Box::new(job));
+        let n = self.thread_count;
+        if n <= 1 || items.len() <= 1 {
+            f(items);
+            return;
         }
-    }
-}
-
-fn worker_loop(rx: Arc<Mutex<Receiver<Job>>>, running: Arc<AtomicBool>) {
-    while running.load(Ordering::SeqCst) {
-        let job = {
-            let Ok(guard) = rx.lock() else { break };
-            guard.recv()
-        };
-        match job {
-            Ok(job) => job(),
-            Err(_) => break,
-        }
-    }
-}
-
-impl Drop for ThreadPool {
-    fn drop(&mut self) {
-        self.running.store(false, Ordering::SeqCst);
-        self.tx.take();
-        for w in self.workers.drain(..) {
-            let _ = w.join();
-        }
+        let chunk_size = items.len().div_ceil(n);
+        self.inner.install(|| {
+            items.par_chunks_mut(chunk_size).for_each(|chunk| f(chunk));
+        });
     }
 }

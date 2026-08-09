@@ -37,7 +37,13 @@ fn encode_uyvy_profile(c: &mut Criterion, name: &str, width: i32, height: i32, p
 
 fn benches(c: &mut Criterion) {
     encode_uyvy_profile(c, "vmx_encode_uyvy_720p_omt_lq", 1280, 720, Profile::OmtLq);
-    encode_uyvy_profile(c, "vmx_encode_uyvy_1080p_omt_hq", 1920, 1080, Profile::OmtHq);
+    encode_uyvy_profile(
+        c,
+        "vmx_encode_uyvy_1080p_omt_hq",
+        1920,
+        1080,
+        Profile::OmtHq,
+    );
 }
 
 criterion_group!(benches_group, benches);

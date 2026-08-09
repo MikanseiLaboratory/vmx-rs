@@ -1,4 +1,5 @@
-//! SSE4.2 / SSSE3 encode path.
+//! SSE4.2 / SSSE3 encode path (x86_64 only; other targets use scalar via the
+//! public `encode_plane` / `decode_plane` entry points).
 //!
 //! Safety: all `std::arch::x86_64` usage must be gated by `is_x86_feature_detected!`
 //! and only operate on buffers with verified lengths. Matrix loads are explicitly
@@ -6,16 +7,22 @@
 
 #![allow(dead_code)]
 
-use std::arch::x86_64::*;
-
-use crate::bitstream::{SliceData, get_2mag_sign};
+use crate::bitstream::SliceData;
 use crate::codec::plane::{PlaneView, decode_plane_scalar, encode_plane_scalar};
+
+#[cfg(target_arch = "x86_64")]
+use crate::bitstream::get_2mag_sign;
+#[cfg(target_arch = "x86_64")]
 use crate::tables::{
     FDCT_ROUND1, FDCT_SQRT2, FDCT_TAN1, FDCT_TAN2, FDCT_TAN3, FTAB1_128, FTAB2_128, FTAB3_128,
     FTAB4_128, RND_FRW_ROW, SHIFT_FRW_COL, SHIFT_FRW_ROW, ZIGZAG_INV,
 };
+#[cfg(target_arch = "x86_64")]
 use crate::types::SLICE_HEIGHT;
+#[cfg(target_arch = "x86_64")]
+use std::arch::x86_64::*;
 
+#[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "sse4.2")]
 unsafe fn fdct_row_sse(input: __m128i, ftab: &[i16; 32]) -> __m128i {
     // SAFETY: the caller guarantees SSE4.2 and `ftab` contains 32 i16 values.
@@ -62,6 +69,7 @@ unsafe fn fdct_row_sse(input: __m128i, ftab: &[i16; 32]) -> __m128i {
 /// The caller must have detected SSE4.2 and provide at least eight readable
 /// bytes at each `src + row * stride`, plus 192 readable `u16`s at `matrix`.
 /// `out` is written in entropy (zigzag) order.
+#[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "sse4.2")]
 pub unsafe fn fdct_quant_zig_sse(
     src: *const u8,
@@ -206,6 +214,7 @@ pub fn encode_plane(
     encode_plane_scalar(plane, dc, ac, encode_matrix, dc_shift, temp_block);
 }
 
+#[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "sse4.2")]
 unsafe fn encode_plane_sse(
     plane: &PlaneView<'_>,
@@ -310,7 +319,7 @@ pub fn decode_plane(
     decode_plane_scalar(plane, dc, ac, decode_matrix, dc_shift, temp_block);
 }
 
-#[cfg(test)]
+#[cfg(all(test, target_arch = "x86_64"))]
 mod tests {
     use super::fdct_quant_zig_sse;
     use crate::codec::dct::fdct_quant_zig;

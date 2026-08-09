@@ -36,7 +36,7 @@ impl ThreadPool {
     pub fn parallel_chunks_mut<T, F>(&self, items: &mut [T], f: F)
     where
         T: Send,
-        F: Fn(&mut [T]) + Sync,
+        F: Fn(&mut [T]) + Sync + Send,
     {
         let n = self.thread_count;
         if n <= 1 || items.len() <= 1 {
@@ -45,7 +45,7 @@ impl ThreadPool {
         }
         let chunk_size = items.len().div_ceil(n);
         self.inner.install(|| {
-            items.par_chunks_mut(chunk_size).for_each(|chunk| f(chunk));
+            items.par_chunks_mut(chunk_size).for_each(f);
         });
     }
 }

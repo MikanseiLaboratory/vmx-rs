@@ -101,8 +101,7 @@ unsafe fn uyvy_to_planar_ssse3(
     // SAFETY: caller gated on SSSE3; row loops clamp to buffer lengths below.
     unsafe {
         // Matches libvmx: shuffle UYVY → YYYYYYYY UUUUVVVV within each 16-byte lane.
-        let y_shuffle =
-            _mm_set_epi8(14, 10, 6, 2, 12, 8, 4, 0, 15, 13, 11, 9, 7, 5, 3, 1);
+        let y_shuffle = _mm_set_epi8(14, 10, 6, 2, 12, 8, 4, 0, 15, 13, 11, 9, 7, 5, 3, 1);
         let width = size.width as usize;
         let simd_w = width & !31; // 32 luma samples = 64 UYVY bytes per iteration
 

@@ -21,7 +21,7 @@ Pure Rust [VMX1](https://github.com/openmediatransport/libvmx) video codec.
 - Cross-platform: Windows / Linux / macOS × x86_64 / ARM64
 - Runtime SIMD dispatch where implemented
 - Slice-parallel encode/decode via [rayon](https://crates.io/crates/rayon)
-- MSRV: Rust 1.88 (edition 2024)
+- MSRV: Rust 1.97 (edition 2024)
 
 ## SIMD vs `libvmx`
 

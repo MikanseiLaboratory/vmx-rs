@@ -4,7 +4,8 @@
 //! cargo bench --bench simd_paths -- --warm-up-time 2 --measurement-time 5
 //! ```
 
-use criterion::{Criterion, black_box, criterion_group, criterion_main};
+use criterion::{Criterion, criterion_group, criterion_main};
+use std::hint::black_box;
 use vmx::kernels::{Size, fdct_quant_zig, planar_to_uyvy_scalar, uyvy_to_planar_scalar};
 
 #[cfg(target_arch = "x86_64")]

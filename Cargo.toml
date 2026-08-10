@@ -2,7 +2,7 @@
 name = "vmx"
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.88"
+rust-version = "1.97"
 license = "MIT"
 description = "Pure Rust VMX1 video codec"
 authors = ["MikanseiLaboratory"]
@@ -20,7 +20,7 @@ thiserror = "2"
 rayon = "1.10"
 
 [dev-dependencies]
-criterion = "0.5"
+criterion = "0.8"
 
 [[bench]]
 name = "encode_decode"

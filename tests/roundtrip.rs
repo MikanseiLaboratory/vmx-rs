@@ -130,3 +130,50 @@ fn truncated_bitstream_rejects() {
 fn mag_sign_in_bitstream_module() {
     let _ = Codec::new(Config::new(32, 32));
 }
+
+#[test]
+fn preview_bgra_from_dc_prefix() {
+    use vmx::preview_bitstream_length;
+
+    let width = 1920;
+    let height = 1080;
+    let (frame, stride) = make_uyvy(width, height);
+    let mut enc = Codec::new(Config {
+        width,
+        height,
+        profile: Profile::OmtHq,
+        color_space: Default::default(),
+    })
+    .unwrap();
+    enc.encode_uyvy(&frame, stride).unwrap();
+    let mut bitstream = vec![0u8; 8 << 20];
+    let full_len = enc.save_to(&mut bitstream).unwrap();
+    let preview_len = enc.get_encoded_preview_length();
+    assert!(preview_len > 3);
+    assert!(preview_len < full_len);
+    assert_eq!(
+        preview_bitstream_length(&bitstream[..full_len]).unwrap(),
+        preview_len
+    );
+    assert_eq!(
+        Codec::preview_payload_len(&bitstream[..full_len]).unwrap(),
+        preview_len
+    );
+
+    let mut dec = Codec::new(Config::new(width, height)).unwrap();
+    dec.load_from(&bitstream[..preview_len]).unwrap();
+    let pw = dec.preview_size().width as usize;
+    let ph = dec.preview_size().height as usize;
+    assert_eq!((pw, ph), (240, 135));
+    let out_stride = pw * 4;
+    let mut out = vec![0u8; out_stride * ph];
+    dec.decode_preview_bgra(&mut out, out_stride).unwrap();
+    assert!(out.iter().any(|&b| b != 0), "preview BGRA looks empty");
+
+    // Reload full bitstream and ensure preview decode still works (DC subset).
+    dec.load_from(&bitstream[..full_len]).unwrap();
+    dec.decode_preview_bgrx(&mut out, out_stride).unwrap();
+
+    let mut too_small = vec![0u8; out_stride * (ph / 2).max(1)];
+    assert!(dec.decode_preview_bgra(&mut too_small, out_stride).is_err());
+}

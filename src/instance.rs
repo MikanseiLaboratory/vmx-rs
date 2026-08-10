@@ -6,7 +6,7 @@ use crate::color::convert::{
     bgra_to_yuv4224, calculate_psnr, nv12_to_planar, planar_to_uyvy, planar_to_yuy2,
     select_rgb_yuv, select_yuv_rgb, uyvy_to_planar, yuy2_to_planar, yv12_to_planar,
 };
-use crate::container::{encoded_preview_length, parse_and_load, save_to};
+use crate::container::{encoded_preview_length, parse_and_load, preview_bitstream_length, save_to};
 use crate::error::{Result, VmxError};
 use crate::simd::dispatch::CpuFeatures;
 use crate::tables::{QUALITY, QUANT_MATRIX};
@@ -405,12 +405,20 @@ impl Codec {
     }
 
     fn validate_output(&self, dst: &[u8], stride: usize, bpp: usize) -> Result<()> {
-        let min_stride = self.size.width as usize * bpp;
+        Self::validate_dims(dst, stride, bpp, self.size)
+    }
+
+    fn validate_preview_output(&self, dst: &[u8], stride: usize, bpp: usize) -> Result<()> {
+        Self::validate_dims(dst, stride, bpp, self.preview_size)
+    }
+
+    fn validate_dims(dst: &[u8], stride: usize, bpp: usize, size: Size) -> Result<()> {
+        let min_stride = size.width as usize * bpp;
         if stride < min_stride {
             return Err(VmxError::InvalidParameters);
         }
         let need = stride
-            .checked_mul(self.size.height as usize)
+            .checked_mul(size.height as usize)
             .ok_or(VmxError::InvalidParameters)?;
         if dst.len() < need {
             return Err(VmxError::OutputTooSmall {
@@ -419,6 +427,33 @@ impl Codec {
             });
         }
         Ok(())
+    }
+
+    /// DC-only decode into internal planes (one 8×8 DC broadcast per block).
+    fn decode_planes_preview(&mut self) {
+        for slice in self.slices.iter_mut() {
+            slice.dc.pos = 0;
+            slice.dc.bits_left = crate::types::BITS_SIZE;
+            slice.dc.temp_read = {
+                let mut buf = [0u8; 8];
+                let n = 8.min(slice.dc.stream.len());
+                buf[..n].copy_from_slice(&slice.dc.stream[..n]);
+                u64::from_be_bytes(buf)
+            };
+            for pi in 0..3 {
+                let mut view = crate::codec::plane::PlaneView {
+                    index: pi,
+                    data: self.planes.data[pi].as_mut_slice(),
+                    stride: self.planes.stride[pi],
+                    offset: slice.offset[pi],
+                };
+                crate::codec::preview::decode_plane_preview(
+                    &mut view,
+                    &mut slice.dc,
+                    self.dc_shift,
+                );
+            }
+        }
     }
 
     pub fn encode_yuy2(&mut self, src: &[u8], stride: usize) -> Result<()> {
@@ -623,32 +658,13 @@ impl Codec {
         Err(VmxError::InvalidParameters)
     }
 
+    /// Decode a 1/8 progressive preview as packed UYVY.
+    ///
+    /// Codec dimensions must match the **full** frame; output size is
+    /// [`Self::preview_size`]. Interlaced preview is not supported.
     pub fn decode_preview_uyvy(&mut self, dst: &mut [u8], stride: usize) -> Result<()> {
-        // DC-only decode into planes then subsample
-        for slice in self.slices.iter_mut() {
-            slice.dc.pos = 0;
-            slice.dc.bits_left = crate::types::BITS_SIZE;
-            slice.dc.temp_read = {
-                let mut buf = [0u8; 8];
-                let n = 8.min(slice.dc.stream.len());
-                buf[..n].copy_from_slice(&slice.dc.stream[..n]);
-                u64::from_be_bytes(buf)
-            };
-            for pi in 0..3 {
-                let mut view = crate::codec::plane::PlaneView {
-                    index: pi,
-                    data: self.planes.data[pi].as_mut_slice(),
-                    stride: self.planes.stride[pi],
-                    offset: slice.offset[pi],
-                };
-                crate::codec::preview::decode_plane_preview(
-                    &mut view,
-                    &mut slice.dc,
-                    self.dc_shift,
-                );
-            }
-        }
-        // Nearest-neighbor 1/8 subsample to dst
+        self.validate_preview_output(dst, stride, 2)?;
+        self.decode_planes_preview();
         let pw = self.preview_size.width as usize;
         let ph = self.preview_size.height as usize;
         for row in 0..ph {
@@ -667,6 +683,63 @@ impl Codec {
             }
         }
         Ok(())
+    }
+
+    /// Decode a 1/8 progressive preview as packed BGRA8 (alpha = 255).
+    ///
+    /// Codec dimensions must match the **full** frame; output size is
+    /// [`Self::preview_size`]. Interlaced preview is not supported.
+    pub fn decode_preview_bgra(&mut self, dst: &mut [u8], stride: usize) -> Result<()> {
+        self.validate_preview_output(dst, stride, 4)?;
+        self.decode_planes_preview();
+        let table = select_yuv_rgb(self.color_space, self.size.height);
+        let pw = self.preview_size.width as usize;
+        let ph = self.preview_size.height as usize;
+        let y_stride = self.planes.stride[0];
+        let u_stride = self.planes.stride[1];
+        let v_stride = self.planes.stride[2];
+        let y_plane = &self.planes.data[0];
+        let u_plane = &self.planes.data[1];
+        let v_plane = &self.planes.data[2];
+        for row in 0..ph {
+            let sy = row * 8;
+            let d = &mut dst[row * stride..];
+            let mut x = 0usize;
+            let mut px = 0usize;
+            while px + 1 < pw {
+                let sx = x * 8;
+                let cb = u_plane[sy * u_stride + sx] as i32 - 128;
+                let cr = v_plane[sy * v_stride + sx] as i32 - 128;
+                for i in 0..2 {
+                    // Full-plane Y is 4:2:2 packed as Y0 Y1 per macropixel at sx*2.
+                    let yy = y_plane[sy * y_stride + sx * 2 + i] as i32;
+                    let y_term = (table[0] as i32 * (yy - 16)) >> 14;
+                    let r = y_term + ((table[1] as i32 * cr) >> 14);
+                    let g = y_term - ((table[2] as i32 * cb) >> 14) - ((table[3] as i32 * cr) >> 14);
+                    let b = y_term + ((table[4] as i32 * cb) >> 13);
+                    let o = (px + i) * 4;
+                    d[o] = b.clamp(0, 255) as u8;
+                    d[o + 1] = g.clamp(0, 255) as u8;
+                    d[o + 2] = r.clamp(0, 255) as u8;
+                    d[o + 3] = 255;
+                }
+                x += 1;
+                px += 2;
+            }
+        }
+        Ok(())
+    }
+
+    /// Alias for [`Self::decode_preview_bgra`] (opaque alpha).
+    pub fn decode_preview_bgrx(&mut self, dst: &mut [u8], stride: usize) -> Result<()> {
+        self.decode_preview_bgra(dst, stride)
+    }
+
+    /// DC-prefix length of `data` without a live codec instance.
+    ///
+    /// See [`preview_bitstream_length`].
+    pub fn preview_payload_len(data: &[u8]) -> Result<usize> {
+        preview_bitstream_length(data)
     }
 
     pub fn calculate_psnr(&self, a: &[u8], b: &[u8], stride: usize, bpp: usize) -> f32 {

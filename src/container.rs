@@ -190,3 +190,63 @@ pub fn encoded_preview_length(
     let _ = (format, quality);
     len
 }
+
+/// Length of the DC-only prefix of an encoded VMX1 bitstream.
+///
+/// Matches `VMX_GetEncodedPreviewLength` for a completed encode: header plus
+/// every slice's DC chunk. Progressive only — interlaced preview is unsupported.
+///
+/// The 8K special-case header byte `14` is expanded to 270 slices, same as
+/// [`parse_and_load`].
+pub fn preview_bitstream_length(data: &[u8]) -> Result<usize> {
+    if data.len() < 3 {
+        return Err(VmxError::BufferOverflow);
+    }
+    let b0 = data[0];
+    if b0 != CodecFormat::Progressive as u8
+        && b0 != CodecFormat::Interlaced as u8
+        && b0 != CodecFormat::Extended as u8
+    {
+        return Err(VmxError::InvalidCodecFormat);
+    }
+
+    let mut offset = 0usize;
+    if b0 == CodecFormat::Extended as u8 {
+        if data.len() < 5 {
+            return Err(VmxError::BufferOverflow);
+        }
+        offset = 2;
+    }
+
+    let format_byte = data[offset];
+    if format_byte == CodecFormat::Interlaced as u8 {
+        // Progressive preview only for this build.
+        return Err(VmxError::InvalidParameters);
+    }
+    if format_byte != CodecFormat::Progressive as u8 {
+        return Err(VmxError::InvalidCodecFormat);
+    }
+
+    let mut slice_count = data[offset + 2] as usize;
+    if slice_count == 14 {
+        // Encoded 8K frames store slice_count as 14; expand like parse_and_load.
+        slice_count = 270;
+    }
+    if slice_count == 0 {
+        return Err(VmxError::InvalidSliceCount);
+    }
+
+    let mut b = offset + 3;
+    for _ in 0..slice_count {
+        if b + 4 > data.len() {
+            return Err(VmxError::BufferOverflow);
+        }
+        let len = u32::from_le_bytes(data[b..b + 4].try_into().unwrap()) as usize;
+        b += 4;
+        if b + len > data.len() {
+            return Err(VmxError::BufferOverflow);
+        }
+        b += len;
+    }
+    Ok(b)
+}

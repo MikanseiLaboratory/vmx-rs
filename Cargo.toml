@@ -19,17 +19,6 @@ default = []
 thiserror = "2"
 rayon = "1.10"
 
-[dev-dependencies]
-criterion = "0.8"
-
-[[bench]]
-name = "encode_decode"
-harness = false
-
-[[bench]]
-name = "simd_paths"
-harness = false
-
 [[example]]
 name = "roundtrip"
 

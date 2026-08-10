@@ -56,8 +56,6 @@ pub(crate) fn uyvy_to_planar(
 }
 
 /// Scalar UYVY → planar.
-///
-/// `pub` so Criterion can call it via `vmx::kernels` (benches are a separate crate).
 pub fn uyvy_to_planar_scalar(
     src: &[u8],
     stride: usize,
@@ -88,7 +86,7 @@ pub fn uyvy_to_planar_scalar(
     }
 }
 
-/// SSSE3 UYVY → planar. `pub` for Criterion via `vmx::kernels` (not a stable API).
+/// SSSE3 UYVY → planar.
 ///
 /// # Safety
 /// Caller must have detected SSSE3. Buffers must cover `size` with the given strides.
@@ -185,7 +183,7 @@ pub(crate) fn planar_to_uyvy(
     planar_to_uyvy_scalar(y, y_stride, u, u_stride, v, v_stride, dst, stride, size);
 }
 
-/// Scalar planar → UYVY. `pub` for Criterion via `vmx::kernels` (not a stable API).
+/// Scalar planar → UYVY.
 pub fn planar_to_uyvy_scalar(
     y: &[u8],
     y_stride: usize,
@@ -215,7 +213,7 @@ pub fn planar_to_uyvy_scalar(
     }
 }
 
-/// SSE2 planar → UYVY. `pub` for Criterion via `vmx::kernels` (not a stable API).
+/// SSE2 planar → UYVY.
 ///
 /// # Safety
 /// Caller must have detected SSE2. Buffers must cover `size` with the given strides.

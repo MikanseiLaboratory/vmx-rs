@@ -4,8 +4,7 @@ use crate::bitrate::{adjust_bitrate, lookup_bitrate};
 use crate::codec::slice::{PlaneBuffers, SliceSet, decode_slices, encode_slices};
 use crate::color::convert::{
     bgra_to_yuv4224, calculate_psnr, nv12_to_planar, planar_to_uyvy, planar_to_yuy2,
-    select_rgb_yuv, select_yuv_rgb, uyvy_to_planar, yuv4224_to_bgra, yuy2_to_planar,
-    yv12_to_planar,
+    select_rgb_yuv, select_yuv_rgb, uyvy_to_planar, yuy2_to_planar, yv12_to_planar,
 };
 use crate::container::{encoded_preview_length, parse_and_load, save_to};
 use crate::error::{Result, VmxError};
@@ -99,14 +98,20 @@ impl Codec {
 
         let mut features = CpuFeatures::detect();
         let br = lookup_bitrate(profile, height);
-        let mut threads = br.threads as usize;
+        // Decode/encode share the pool; prefer enough workers for 1080p59.94
+        // rather than the historical bitrate-table default of 2 @ 1080p.
         let nthreads = std::thread::available_parallelism()
             .map(|n| n.get())
             .unwrap_or(2);
-        if height >= 4320 && nthreads >= 16 {
-            threads = 16;
-        } else if height >= 2160 && nthreads >= 8 {
-            threads = 8;
+        let mut threads = br.threads as usize;
+        if height >= 4320 {
+            threads = threads.max(16).min(nthreads);
+        } else if height >= 2160 {
+            threads = threads.max(8).min(nthreads);
+        } else if height >= 1080 {
+            threads = threads.max(6).min(nthreads);
+        } else {
+            threads = threads.max(2).min(nthreads);
         }
 
         let mut y_stride = width as usize;
@@ -353,13 +358,9 @@ impl Codec {
     }
 
     fn configure_interlaced(&mut self, format: Format) {
+        // Interlaced decode is not supported — always treat as progressive pack.
+        let _ = format;
         self.format = Format::Progressive;
-        if format == Format::Interlaced {
-            let h = self.size.height;
-            if h == 480 || h == 576 || h == 1080 {
-                self.format = Format::Interlaced;
-            }
-        }
     }
 
     pub fn get_encoded_preview_length(&self) -> usize {
@@ -387,6 +388,7 @@ impl Codec {
     }
 
     pub fn decode_uyvy(&mut self, dst: &mut [u8], stride: usize) -> Result<()> {
+        self.validate_output(dst, stride, 2)?;
         self.decode_planes();
         planar_to_uyvy(
             &self.planes.data[0],
@@ -399,6 +401,23 @@ impl Codec {
             stride,
             self.size,
         );
+        Ok(())
+    }
+
+    fn validate_output(&self, dst: &[u8], stride: usize, bpp: usize) -> Result<()> {
+        let min_stride = self.size.width as usize * bpp;
+        if stride < min_stride {
+            return Err(VmxError::InvalidParameters);
+        }
+        let need = stride
+            .checked_mul(self.size.height as usize)
+            .ok_or(VmxError::InvalidParameters)?;
+        if dst.len() < need {
+            return Err(VmxError::OutputTooSmall {
+                need,
+                have: dst.len(),
+            });
+        }
         Ok(())
     }
 
@@ -423,6 +442,7 @@ impl Codec {
     }
 
     pub fn decode_yuy2(&mut self, dst: &mut [u8], stride: usize) -> Result<()> {
+        self.validate_output(dst, stride, 2)?;
         self.decode_planes();
         planar_to_yuy2(
             &self.planes.data[0],
@@ -459,33 +479,19 @@ impl Codec {
     }
 
     pub fn decode_bgra(&mut self, dst: &mut [u8], stride: usize) -> Result<()> {
-        self.decode_planes();
-        // decode alpha too
-        for slice in self.slices.iter_mut() {
-            let mut view = crate::codec::plane::PlaneView {
-                index: 3,
-                data: self.planes.data[3].as_mut_slice(),
-                stride: self.planes.stride[3],
-                offset: slice.offset[3],
-            };
-            // Re-decode alpha would need fresh bitstream — alpha shares slice streams.
-            // For progressive path, alpha was encoded after YUV in same DC/AC; our decode
-            // only did 3 planes. Full alpha decode requires single-pass 4-plane decode.
-            let _ = &mut view;
-        }
+        self.validate_output(dst, stride, 4)?;
         let table = select_yuv_rgb(self.color_space, self.size.height);
-        yuv4224_to_bgra(
-            &self.planes.data[0],
-            self.planes.stride[0],
-            &self.planes.data[1],
-            self.planes.stride[1],
-            &self.planes.data[2],
-            self.planes.stride[2],
-            &self.planes.data[3],
-            self.planes.stride[3],
+        let dc_shift = self.dc_shift;
+        let idx = self.decode_matrix_idx;
+        crate::codec::slice::decode_slices_fused_bgra(
+            &mut self.planes,
+            &mut self.slices,
+            &self.decode_presets[idx],
+            dc_shift,
+            Some(&self.pool),
             dst,
             stride,
-            self.size,
+            self.size.width,
             table,
         );
         Ok(())
@@ -559,39 +565,17 @@ impl Codec {
         Ok(())
     }
 
-    pub fn encode_uyva(&mut self, src: &[u8], stride: usize) -> Result<()> {
-        // UYVY + alpha plane after
-        let uyvy_stride = self.size.width as usize * 2;
-        let frame = self.size.width as usize * self.size.height as usize * 2;
-        if src.len() < frame + self.size.width as usize * self.size.height as usize {
-            return Err(VmxError::InvalidParameters);
-        }
-        self.encode_uyvy(src, stride.max(uyvy_stride))?;
-        let a_off = stride * self.size.height as usize;
-        for row in 0..self.size.height as usize {
-            let src_row = &src[a_off + row * self.size.width as usize..];
-            let dst = &mut self.planes.data[3][row * self.planes.stride[3]
-                ..row * self.planes.stride[3] + self.size.width as usize];
-            dst.copy_from_slice(&src_row[..self.size.width as usize]);
-        }
-        // Re-encode including alpha — call encode_planes again
-        self.encode_planes();
-        Ok(())
+    /// Alpha / UYVA is not supported in this build.
+    pub fn encode_uyva(&mut self, _src: &[u8], _stride: usize) -> Result<()> {
+        Err(VmxError::InvalidParameters)
     }
 
-    pub fn decode_uyva(&mut self, dst: &mut [u8], stride: usize) -> Result<()> {
-        self.decode_uyvy(dst, stride)?;
-        let a_off = stride * self.size.height as usize;
-        for row in 0..self.size.height as usize {
-            let src = &self.planes.data[3][row * self.planes.stride[3]
-                ..row * self.planes.stride[3] + self.size.width as usize];
-            dst[a_off + row * self.size.width as usize
-                ..a_off + row * self.size.width as usize + self.size.width as usize]
-                .copy_from_slice(src);
-        }
-        Ok(())
+    /// Alpha / UYVA is not supported in this build.
+    pub fn decode_uyva(&mut self, _dst: &mut [u8], _stride: usize) -> Result<()> {
+        Err(VmxError::InvalidParameters)
     }
 
+    /// 10-bit P216 is not supported in this build.
     pub fn encode_p216(
         &mut self,
         _src_y: &[u8],
@@ -599,10 +583,10 @@ impl Codec {
         _src_uv: &[u8],
         _stride_uv: usize,
     ) -> Result<()> {
-        // 10-bit path — store MSB into 8-bit planes for now as interim
         Err(VmxError::InvalidParameters)
     }
 
+    /// 10-bit P216 is not supported in this build.
     pub fn decode_p216(
         &mut self,
         _dst_y: &mut [u8],
@@ -613,6 +597,7 @@ impl Codec {
         Err(VmxError::InvalidParameters)
     }
 
+    /// 10-bit PA16 is not supported in this build.
     pub fn encode_pa16(
         &mut self,
         _src_y: &[u8],
@@ -625,6 +610,7 @@ impl Codec {
         Err(VmxError::InvalidParameters)
     }
 
+    /// 10-bit PA16 is not supported in this build.
     pub fn decode_pa16(
         &mut self,
         _dst_y: &mut [u8],

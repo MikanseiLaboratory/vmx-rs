@@ -35,12 +35,12 @@ pub type Decoder = Codec;
 /// stays covered by private `#[cfg(test)]` units next to each implementation.
 #[doc(hidden)]
 pub mod kernels {
-    pub use crate::codec::dct::fdct_quant_zig;
+    pub use crate::codec::dct::{fdct_quant_zig, zig_invquant_idct};
     pub use crate::color::convert::{planar_to_uyvy_scalar, uyvy_to_planar_scalar};
     pub use crate::types::Size;
 
     #[cfg(target_arch = "x86_64")]
     pub use crate::color::convert::{planar_to_uyvy_sse2, uyvy_to_planar_ssse3};
     #[cfg(target_arch = "x86_64")]
-    pub use crate::simd::sse128::fdct_quant_zig_sse;
+    pub use crate::simd::sse128::{fdct_quant_zig_sse, zig_invquant_idct_sse};
 }

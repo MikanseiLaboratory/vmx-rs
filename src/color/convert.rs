@@ -380,6 +380,8 @@ pub fn bgra_to_yuv4224(
     }
 }
 
+/// Progressive 4:2:2:4 → BGRA (alpha plane). Kept for libvmx API parity / preview+.
+#[allow(dead_code)]
 pub fn yuv4224_to_bgra(
     y: &[u8],
     y_stride: usize,
@@ -424,17 +426,7 @@ pub fn yuv422_to_bgra(
     table: &[i16; 5],
 ) {
     yuv422_to_bgra_impl(
-        y,
-        y_stride,
-        u,
-        u_stride,
-        v,
-        v_stride,
-        None,
-        dst,
-        dst_stride,
-        size,
-        table,
+        y, y_stride, u, u_stride, v, v_stride, None, dst, dst_stride, size, table,
     );
 }
 

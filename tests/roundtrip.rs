@@ -7,9 +7,9 @@ fn make_uyvy(width: i32, height: i32) -> (Vec<u8>, usize) {
         for x in (0..width as usize).step_by(2) {
             let o = y * stride + x * 2;
             frame[o] = (100 + ((x / 2) % 40) as u8).min(240);
-            frame[o + 1] = (16 + ((x + y * 3) % 220) as u8);
+            frame[o + 1] = 16 + ((x + y * 3) % 220) as u8;
             frame[o + 2] = (140 + ((y / 4) % 40) as u8).min(240);
-            frame[o + 3] = (16 + ((x + 1 + y * 5) % 220) as u8);
+            frame[o + 3] = 16 + ((x + 1 + y * 5) % 220) as u8;
         }
     }
     (frame, stride)
@@ -102,11 +102,7 @@ fn repeat_decode_same_bitstream() {
     let mut out_b = vec![0u8; stride * 128];
     for i in 0..100 {
         dec.load_from(&bitstream[..len]).unwrap();
-        let dst = if i % 2 == 0 {
-            &mut out_a
-        } else {
-            &mut out_b
-        };
+        let dst = if i % 2 == 0 { &mut out_a } else { &mut out_b };
         dec.decode_uyvy(dst, stride).unwrap();
     }
     assert_eq!(out_a, out_b);

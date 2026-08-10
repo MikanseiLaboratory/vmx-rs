@@ -462,8 +462,8 @@ pub unsafe fn zig_invquant_idct_sse(
         let mut out_rows = [[0i16; 8]; 8];
         for x in 0..8 {
             let col = [
-                rows[0][x], rows[1][x], rows[2][x], rows[3][x], rows[4][x], rows[5][x],
-                rows[6][x], rows[7][x],
+                rows[0][x], rows[1][x], rows[2][x], rows[3][x], rows[4][x], rows[5][x], rows[6][x],
+                rows[7][x],
             ];
             let out = idct_column(col, 0);
             for y in 0..8 {
@@ -471,8 +471,8 @@ pub unsafe fn zig_invquant_idct_sse(
             }
         }
 
-        for y in 0..8 {
-            let v = _mm_loadu_si128(out_rows[y].as_ptr().cast::<__m128i>());
+        for (y, row) in out_rows.iter().enumerate() {
+            let v = _mm_loadu_si128(row.as_ptr().cast::<__m128i>());
             let v = _mm_adds_epi16(v, add);
             let bytes = _mm_packus_epi16(v, v);
             _mm_storel_epi64(dst.add(y * stride).cast::<__m128i>(), bytes);
@@ -485,28 +485,36 @@ pub unsafe fn zig_invquant_idct_sse(
 #[target_feature(enable = "sse4.1")]
 unsafe fn idct_row_sse(x: [i16; 8], tab: &[i16; 32]) -> [i16; 8] {
     use crate::tables::{IRND_INV_ROW, SHIFT_INV_ROW};
-    // SAFETY: SSE4.1; tab length 32.
-    unsafe {
-        // Match scalar: for i in 0..4
-        //   even = madd(x0,tab[2i],x2,tab[2i+1]) + IRND + madd(x4,tab[8+2i],x6,tab[8+2i+1])
-        //   odd  = madd(x5,tab[24+2i],x7,tab[24+2i+1]) + madd(x1,tab[16+2i],x3,tab[16+2i+1])
-        let x0 = _mm_set1_epi32(x[0] as i32);
-        let x1 = _mm_set1_epi32(x[1] as i32);
-        let x2 = _mm_set1_epi32(x[2] as i32);
-        let x3 = _mm_set1_epi32(x[3] as i32);
-        let x4 = _mm_set1_epi32(x[4] as i32);
-        let x5 = _mm_set1_epi32(x[5] as i32);
-        let x6 = _mm_set1_epi32(x[6] as i32);
-        let x7 = _mm_set1_epi32(x[7] as i32);
+    // Match scalar: for i in 0..4
+    //   even = madd(x0,tab[2i],x2,tab[2i+1]) + IRND + madd(x4,tab[8+2i],x6,tab[8+2i+1])
+    //   odd  = madd(x5,tab[24+2i],x7,tab[24+2i+1]) + madd(x1,tab[16+2i],x3,tab[16+2i+1])
+    // SAFETY: caller enabled SSE4.1; tab length 32.
+    let x0 = _mm_set1_epi32(x[0] as i32);
+    let x1 = _mm_set1_epi32(x[1] as i32);
+    let x2 = _mm_set1_epi32(x[2] as i32);
+    let x3 = _mm_set1_epi32(x[3] as i32);
+    let x4 = _mm_set1_epi32(x[4] as i32);
+    let x5 = _mm_set1_epi32(x[5] as i32);
+    let x6 = _mm_set1_epi32(x[6] as i32);
+    let x7 = _mm_set1_epi32(x[7] as i32);
 
-        // Build tab lanes for i=0..3 as four i32 products manually — keep scalar for oracle.
-        // Full vectorized tab broadcast is complex; use scalar idct_row which is already
-        // the verified oracle, and rely on SIMD dequant + packus for the measurable win.
-        let _ = (
-            x0, x1, x2, x3, x4, x5, x6, x7, IRND_INV_ROW, SHIFT_INV_ROW, tab,
-        );
-        crate::codec::dct::idct_row(x, tab)
-    }
+    // Build tab lanes for i=0..3 as four i32 products manually — keep scalar for oracle.
+    // Full vectorized tab broadcast is complex; use scalar idct_row which is already
+    // the verified oracle, and rely on SIMD dequant + packus for the measurable win.
+    let _ = (
+        x0,
+        x1,
+        x2,
+        x3,
+        x4,
+        x5,
+        x6,
+        x7,
+        IRND_INV_ROW,
+        SHIFT_INV_ROW,
+        tab,
+    );
+    crate::codec::dct::idct_row(x, tab)
 }
 
 #[cfg(all(test, target_arch = "x86_64"))]

@@ -252,9 +252,12 @@ pub fn decode_slices_fused_bgra(
             let rows = slice.pixel_height.max(0) as usize;
             // SAFETY: dst covers full frame; each slice writes its own row band.
             let dst_band = unsafe { std::slice::from_raw_parts_mut(dst_ptr as *mut u8, dst_len) };
-            let y = unsafe { std::slice::from_raw_parts(plane_ptrs[0] as *const u8, plane_lens[0]) };
-            let u = unsafe { std::slice::from_raw_parts(plane_ptrs[1] as *const u8, plane_lens[1]) };
-            let v = unsafe { std::slice::from_raw_parts(plane_ptrs[2] as *const u8, plane_lens[2]) };
+            let y =
+                unsafe { std::slice::from_raw_parts(plane_ptrs[0] as *const u8, plane_lens[0]) };
+            let u =
+                unsafe { std::slice::from_raw_parts(plane_ptrs[1] as *const u8, plane_lens[1]) };
+            let v =
+                unsafe { std::slice::from_raw_parts(plane_ptrs[2] as *const u8, plane_lens[2]) };
             crate::color::convert::yuv422_band_to_bgra(
                 y,
                 strides[0],
@@ -274,7 +277,7 @@ pub fn decode_slices_fused_bgra(
 
     match pool {
         Some(pool) if pool.thread_count() > 1 && slices.len() > 1 => {
-            pool.parallel_chunks_mut(slices, |chunk| pack_chunk(chunk));
+            pool.parallel_chunks_mut(slices, pack_chunk);
         }
         _ => pack_chunk(slices),
     }

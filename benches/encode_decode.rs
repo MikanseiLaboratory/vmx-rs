@@ -8,9 +8,9 @@ fn make_uyvy(width: i32, height: i32) -> (Vec<u8>, usize) {
         for x in (0..width as usize).step_by(2) {
             let o = y * stride + x * 2;
             frame[o] = 128;
-            frame[o + 1] = ((16 + (x + y) % 220) as u8);
+            frame[o + 1] = (16 + (x + y) % 220) as u8;
             frame[o + 2] = 128;
-            frame[o + 3] = ((16 + (x + 1 + y) % 220) as u8);
+            frame[o + 3] = (16 + (x + 1 + y) % 220) as u8;
         }
     }
     (frame, stride)

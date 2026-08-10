@@ -715,7 +715,8 @@ impl Codec {
                     let yy = y_plane[sy * y_stride + sx * 2 + i] as i32;
                     let y_term = (table[0] as i32 * (yy - 16)) >> 14;
                     let r = y_term + ((table[1] as i32 * cr) >> 14);
-                    let g = y_term - ((table[2] as i32 * cb) >> 14) - ((table[3] as i32 * cr) >> 14);
+                    let g =
+                        y_term - ((table[2] as i32 * cb) >> 14) - ((table[3] as i32 * cr) >> 14);
                     let b = y_term + ((table[4] as i32 * cb) >> 13);
                     let o = (px + i) * 4;
                     d[o] = b.clamp(0, 255) as u8;

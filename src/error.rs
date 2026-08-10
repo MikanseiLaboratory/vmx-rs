@@ -32,4 +32,7 @@ pub enum VmxError {
     /// Output buffer too small.
     #[error("output buffer too small: need {need}, have {have}")]
     OutputTooSmall { need: usize, have: usize },
+    /// Bitstream overread / truncated entropy data.
+    #[error("bitstream exhausted")]
+    BitstreamExhausted,
 }

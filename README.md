@@ -78,4 +78,4 @@ RUSTFLAGS="-C target-cpu=native" cargo build --profile release-fast
 
 ## License
 
-MIT — Copyright (c) 2025 Open Media Transport Contributors and MikanseiLaboratory.
+MIT — Copyright (c) 2026 Open Media Transport Contributors and MikanseiLaboratory.

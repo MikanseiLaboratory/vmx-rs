@@ -235,7 +235,7 @@ fn spatial_quant(v: i16, encode_matrix: &[u16], i: usize) -> i16 {
 
 /// One row of the IPP-style inverse DCT (port of the `madd`/`packs` block used
 /// four times inside `VMX_ZIG_INVQUANTIZE_IDCT_8X8_128`).
-fn idct_row(x: [i16; 8], tab: &[i16; 32]) -> [i16; 8] {
+pub(crate) fn idct_row(x: [i16; 8], tab: &[i16; 32]) -> [i16; 8] {
     #[inline]
     fn madd(a: i16, ta: i16, b: i16, tb: i16) -> i32 {
         (a as i32 * ta as i32).wrapping_add(b as i32 * tb as i32)
@@ -268,7 +268,7 @@ fn sat_i32_to_i16(v: i32) -> i16 {
 
 /// Column pass of the inverse DCT for a single column, returning the eight
 /// output samples already offset by `add_val` (still 16-bit, unclamped).
-fn idct_column(col: [i16; 8], add_val: i16) -> [i16; 8] {
+pub(crate) fn idct_column(col: [i16; 8], add_val: i16) -> [i16; 8] {
     let (r0, r1, r2, r3, r4, r5, r6, r7) = (
         col[0], col[1], col[2], col[3], col[4], col[5], col[6], col[7],
     );

@@ -45,13 +45,28 @@ impl SliceData {
 
     #[inline]
     fn read_u64_be(&self, offset: usize) -> u64 {
-        let end = (offset + 8).min(self.stream.len());
-        let mut buf = [0xFFu8; 8];
+        // Prefer loaded stream_length when set (decode); fall back to capacity.
+        let limit = if self.stream_length > 0 {
+            self.stream_length
+        } else {
+            self.stream.len()
+        };
+        if offset >= limit {
+            return 0;
+        }
+        let end = (offset + 8).min(limit).min(self.stream.len());
+        let mut buf = [0u8; 8];
         let available = end.saturating_sub(offset);
         if available > 0 {
             buf[..available].copy_from_slice(&self.stream[offset..end]);
         }
         u64::from_be_bytes(buf)
+    }
+
+    /// True when the read cursor has advanced past the loaded bitstream length.
+    #[inline]
+    pub fn exhausted(&self) -> bool {
+        self.stream_length > 0 && self.pos >= self.stream_length
     }
 
     #[inline]

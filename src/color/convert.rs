@@ -380,6 +380,8 @@ pub fn bgra_to_yuv4224(
     }
 }
 
+/// Progressive 4:2:2:4 → BGRA (alpha plane). Kept for libvmx API parity / preview+.
+#[allow(dead_code)]
 pub fn yuv4224_to_bgra(
     y: &[u8],
     y_stride: usize,
@@ -394,11 +396,120 @@ pub fn yuv4224_to_bgra(
     size: Size,
     table: &[i16; 5],
 ) {
+    yuv422_to_bgra_impl(
+        y,
+        y_stride,
+        u,
+        u_stride,
+        v,
+        v_stride,
+        Some((a, a_stride)),
+        dst,
+        dst_stride,
+        size,
+        table,
+    );
+}
+
+/// Progressive 4:2:2 → BGRA with opaque alpha (no alpha plane read).
+#[allow(dead_code)]
+pub fn yuv422_to_bgra(
+    y: &[u8],
+    y_stride: usize,
+    u: &[u8],
+    u_stride: usize,
+    v: &[u8],
+    v_stride: usize,
+    dst: &mut [u8],
+    dst_stride: usize,
+    size: Size,
+    table: &[i16; 5],
+) {
+    yuv422_to_bgra_impl(
+        y, y_stride, u, u_stride, v, v_stride, None, dst, dst_stride, size, table,
+    );
+}
+
+fn yuv422_to_bgra_impl(
+    y: &[u8],
+    y_stride: usize,
+    u: &[u8],
+    u_stride: usize,
+    v: &[u8],
+    v_stride: usize,
+    alpha: Option<(&[u8], usize)>,
+    dst: &mut [u8],
+    dst_stride: usize,
+    size: Size,
+    table: &[i16; 5],
+) {
+    yuv422_to_bgra_scalar(
+        y, y_stride, u, u_stride, v, v_stride, alpha, dst, dst_stride, size, table,
+    );
+}
+
+/// Pack a horizontal band of planar 4:2:2 into opaque BGRA (used by fused decode).
+pub fn yuv422_band_to_bgra(
+    y: &[u8],
+    y_stride: usize,
+    u: &[u8],
+    u_stride: usize,
+    v: &[u8],
+    v_stride: usize,
+    y_row0: usize,
+    rows: usize,
+    width: usize,
+    dst: &mut [u8],
+    dst_stride: usize,
+    table: &[i16; 5],
+) {
+    for row in 0..rows {
+        let yr = y_row0 + row;
+        let yd = &y[yr * y_stride..];
+        let ud = &u[yr * u_stride..];
+        let vd = &v[yr * v_stride..];
+        let d = &mut dst[yr * dst_stride..];
+        let mut x = 0;
+        let mut px = 0;
+        while px + 1 < width {
+            let cb = ud[x] as i32 - 128;
+            let cr = vd[x] as i32 - 128;
+            for i in 0..2 {
+                let yy = yd[px + i] as i32;
+                let y_term = (table[0] as i32 * (yy - 16)) >> 14;
+                let r = y_term + ((table[1] as i32 * cr) >> 14);
+                let g = y_term - ((table[2] as i32 * cb) >> 14) - ((table[3] as i32 * cr) >> 14);
+                let b = y_term + ((table[4] as i32 * cb) >> 13);
+                let o = (px + i) * 4;
+                d[o] = b.clamp(0, 255) as u8;
+                d[o + 1] = g.clamp(0, 255) as u8;
+                d[o + 2] = r.clamp(0, 255) as u8;
+                d[o + 3] = 255;
+            }
+            x += 1;
+            px += 2;
+        }
+    }
+}
+
+fn yuv422_to_bgra_scalar(
+    y: &[u8],
+    y_stride: usize,
+    u: &[u8],
+    u_stride: usize,
+    v: &[u8],
+    v_stride: usize,
+    alpha: Option<(&[u8], usize)>,
+    dst: &mut [u8],
+    dst_stride: usize,
+    size: Size,
+    table: &[i16; 5],
+) {
     for row in 0..size.height as usize {
         let yd = &y[row * y_stride..];
         let ud = &u[row * u_stride..];
         let vd = &v[row * v_stride..];
-        let ad = &a[row * a_stride..];
+        let ad = alpha.map(|(a, asz)| &a[row * asz..]);
         let d = &mut dst[row * dst_stride..];
         let mut x = 0;
         let mut px = 0;
@@ -415,7 +526,7 @@ pub fn yuv4224_to_bgra(
                 d[o] = b.clamp(0, 255) as u8;
                 d[o + 1] = g.clamp(0, 255) as u8;
                 d[o + 2] = r.clamp(0, 255) as u8;
-                d[o + 3] = ad[px + i];
+                d[o + 3] = ad.map(|a| a[px + i]).unwrap_or(255);
             }
             x += 1;
             px += 2;

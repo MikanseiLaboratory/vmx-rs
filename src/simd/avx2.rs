@@ -1,11 +1,7 @@
 //! AVX2+BMI2 encode/decode path (x86_64).
 //!
-//! Matches libvmx dual 8×8 block iteration (`x += 16` when stride allows).
-//! FDCT uses the proven SSE4.2 kernel twice per pair for bit-exactness; AVX2
-//! accelerates AC nonzero mask construction. Decode reuses the SSE entropy
-//! loop and `zig_invquant_idct_sse` per block.
-//!
-//! Disabled automatically when chroma width % 16 != 0 (see `Codec::new`).
+//! Dual FDCT/IDCT process two adjacent 8×8 blocks per call.
+//! Disabled when chroma width % 16 != 0 (see `Codec::new`).
 
 #![allow(dead_code)]
 
@@ -19,7 +15,490 @@ use crate::types::SLICE_HEIGHT;
 #[cfg(target_arch = "x86_64")]
 use std::arch::x86_64::*;
 
-/// Encode using AVX2+BMI2 when available; falls back to scalar.
+// FDCT row helper
+
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx2")]
+unsafe fn fdct_row_avx2(input: __m256i, ftab: &[i16; 64]) -> __m256i {
+    unsafe {
+        let mut reversed = _mm256_shufflehi_epi16(input, 0b0001_1011);
+        let input = _mm256_shuffle_epi32(input, 0b0100_0100);
+        reversed = _mm256_shuffle_epi32(reversed, 0b1110_1110);
+
+        let sums = _mm256_adds_epi16(input, reversed);
+        let diffs = _mm256_subs_epi16(input, reversed);
+        let full = _mm256_unpacklo_epi32(sums, diffs);
+        let shuffled = _mm256_shuffle_epi32(full, 0b0100_1110);
+
+        let temp1 = _mm256_madd_epi16(shuffled, _mm256_loadu_si256(ftab.as_ptr().add(16).cast()));
+        let temp2 = _mm256_madd_epi16(full, _mm256_loadu_si256(ftab.as_ptr().add(32).cast()));
+        let temp3 = _mm256_madd_epi16(shuffled, _mm256_loadu_si256(ftab.as_ptr().add(48).cast()));
+        let temp4 = _mm256_madd_epi16(full, _mm256_loadu_si256(ftab.as_ptr().cast()));
+
+        let round = _mm256_set1_epi32(crate::tables::RND_FRW_ROW);
+        let lo = _mm256_srai_epi32(
+            _mm256_add_epi32(_mm256_add_epi32(temp4, temp1), round),
+            crate::tables::SHIFT_FRW_ROW,
+        );
+        let hi = _mm256_srai_epi32(
+            _mm256_add_epi32(_mm256_add_epi32(temp3, temp2), round),
+            crate::tables::SHIFT_FRW_ROW,
+        );
+        _mm256_packs_epi32(lo, hi)
+    }
+}
+
+// Dual FDCT
+
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx2")]
+unsafe fn fdct_quant_zig_avx2(
+    src: *const u8,
+    stride: usize,
+    matrix: *const u16,
+    add_val: i16,
+    out_left: &mut [i16; 64],
+    out_right: &mut [i16; 64],
+) {
+    use crate::tables::{
+        FDCT_ROUND1, FDCT_SQRT2, FDCT_TAN1, FDCT_TAN2, FDCT_TAN3, FTAB1_256, FTAB2_256, FTAB3_256,
+        FTAB4_256, SHIFT_FRW_COL, ZIGZAG_INV,
+    };
+
+    unsafe {
+        let mut rows: [__m256i; 8] = [_mm256_setzero_si256(); 8];
+        for (r, row) in rows.iter_mut().enumerate() {
+            let iin = _mm_loadu_si128(src.add(r * stride).cast::<__m128i>());
+            *row = _mm256_cvtepu8_epi16(iin);
+        }
+        let add = _mm256_set1_epi16(add_val);
+        for row in &mut rows {
+            *row = _mm256_adds_epi16(*row, add);
+        }
+
+        let (mut xmm0, mut xmm2, mut xmm7, mut xmm5) = (rows[0], rows[2], rows[7], rows[5]);
+        let xmm3_copy = xmm0;
+        let xmm4_copy = xmm2;
+        xmm0 = _mm256_subs_epi16(xmm0, xmm7);
+        xmm7 = _mm256_adds_epi16(xmm7, xmm3_copy);
+        xmm2 = _mm256_subs_epi16(xmm2, xmm5);
+        xmm5 = _mm256_adds_epi16(xmm5, xmm4_copy);
+
+        let (mut xmm3, mut xmm4) = (rows[3], rows[4]);
+        let xmm1_copy = xmm3;
+        xmm3 = _mm256_subs_epi16(xmm3, xmm4);
+        xmm4 = _mm256_adds_epi16(xmm4, xmm1_copy);
+        let (mut xmm6, mut xmm1) = (rows[6], rows[1]);
+        let tmp = xmm1;
+        xmm1 = _mm256_subs_epi16(xmm1, xmm6);
+        xmm6 = _mm256_adds_epi16(xmm6, tmp);
+
+        let mut tm03 = _mm256_subs_epi16(xmm7, xmm4);
+        let mut tm12 = _mm256_subs_epi16(xmm6, xmm5);
+        xmm4 = _mm256_adds_epi16(xmm4, xmm4);
+        xmm5 = _mm256_adds_epi16(xmm5, xmm5);
+        let mut tp03 = _mm256_adds_epi16(xmm4, tm03);
+        let mut tp12 = _mm256_adds_epi16(xmm5, tm12);
+
+        xmm2 = _mm256_slli_epi16(xmm2, SHIFT_FRW_COL + 1);
+        xmm1 = _mm256_slli_epi16(xmm1, SHIFT_FRW_COL + 1);
+        tp03 = _mm256_slli_epi16(tp03, SHIFT_FRW_COL);
+        tp12 = _mm256_slli_epi16(tp12, SHIFT_FRW_COL);
+        tm03 = _mm256_slli_epi16(tm03, SHIFT_FRW_COL);
+        tm12 = _mm256_slli_epi16(tm12, SHIFT_FRW_COL);
+        xmm3 = _mm256_slli_epi16(xmm3, SHIFT_FRW_COL);
+        xmm0 = _mm256_slli_epi16(xmm0, SHIFT_FRW_COL);
+
+        let mut in4 = _mm256_subs_epi16(tp03, tp12);
+        let diff = _mm256_subs_epi16(xmm1, xmm2);
+        tp12 = _mm256_adds_epi16(tp12, tp12);
+        xmm2 = _mm256_adds_epi16(xmm2, xmm2);
+        let mut in0 = _mm256_adds_epi16(tp12, in4);
+        let sum = _mm256_adds_epi16(xmm2, diff);
+
+        let tan2 = _mm256_set1_epi16(FDCT_TAN2);
+        let mut in6 = _mm256_subs_epi16(_mm256_mulhi_epi16(tan2, tm03), tm12);
+        let mut in2 = _mm256_adds_epi16(_mm256_mulhi_epi16(tan2, tm12), tm03);
+        let sqrt2 = _mm256_set1_epi16(FDCT_SQRT2);
+        let rounder = _mm256_set1_epi16(FDCT_ROUND1);
+        let tp65 = _mm256_or_si256(_mm256_mulhi_epi16(sum, sqrt2), rounder);
+        in2 = _mm256_or_si256(in2, rounder);
+        in6 = _mm256_or_si256(in6, rounder);
+        let tm65 = _mm256_mulhi_epi16(diff, sqrt2);
+
+        let tm465 = _mm256_subs_epi16(xmm3, tm65);
+        let tm765 = _mm256_subs_epi16(xmm0, tp65);
+        let tp765 = _mm256_adds_epi16(tp65, xmm0);
+        let tp465 = _mm256_adds_epi16(tm65, xmm3);
+        let tan3 = _mm256_set1_epi16(FDCT_TAN3);
+        let tan1 = _mm256_set1_epi16(FDCT_TAN1);
+        let tmp3 = _mm256_adds_epi16(_mm256_mulhi_epi16(tm465, tan3), tm465);
+        let tmp5 = _mm256_adds_epi16(_mm256_mulhi_epi16(tm765, tan3), tm765);
+        let mut in1 = _mm256_adds_epi16(_mm256_mulhi_epi16(tp465, tan1), tp765);
+        let mut in3 = _mm256_subs_epi16(tm765, tmp3);
+        let mut in5 = _mm256_adds_epi16(tm465, tmp5);
+        let mut in7 = _mm256_subs_epi16(_mm256_mulhi_epi16(tp765, tan1), tp465);
+
+        in0 = fdct_row_avx2(in0, &FTAB1_256);
+        in1 = fdct_row_avx2(in1, &FTAB2_256);
+        in2 = fdct_row_avx2(in2, &FTAB3_256);
+        in3 = fdct_row_avx2(in3, &FTAB4_256);
+        in4 = fdct_row_avx2(in4, &FTAB1_256);
+        in5 = fdct_row_avx2(in5, &FTAB4_256);
+        in6 = fdct_row_avx2(in6, &FTAB3_256);
+        in7 = fdct_row_avx2(in7, &FTAB2_256);
+
+        let mut transformed = [in0, in1, in2, in3, in4, in5, in6, in7];
+        for (row_idx, row) in transformed.iter_mut().enumerate() {
+            let off = row_idx * 8;
+            let corr128 = _mm_loadu_si128(matrix.add(off).cast::<__m128i>());
+            let corr = _mm256_inserti128_si256(_mm256_castsi128_si256(corr128), corr128, 1);
+            let recp128 = _mm_loadu_si128(matrix.add(64 + off).cast::<__m128i>());
+            let recp = _mm256_inserti128_si256(_mm256_castsi128_si256(recp128), recp128, 1);
+            let scl128 = _mm_loadu_si128(matrix.add(128 + off).cast::<__m128i>());
+            let scl = _mm256_inserti128_si256(_mm256_castsi128_si256(scl128), scl128, 1);
+            let mut q = _mm256_abs_epi16(*row);
+            q = _mm256_add_epi16(q, corr);
+            q = _mm256_mulhi_epu16(q, recp);
+            q = _mm256_mulhi_epu16(q, scl);
+            *row = _mm256_sign_epi16(q, *row);
+        }
+
+        let mut spatial_left = [0i16; 64];
+        let mut spatial_right = [0i16; 64];
+        for (i, row) in transformed.iter().enumerate() {
+            _mm_storeu_si128(
+                spatial_left.as_mut_ptr().add(i * 8).cast(),
+                _mm256_castsi256_si128(*row),
+            );
+            _mm_storeu_si128(
+                spatial_right.as_mut_ptr().add(i * 8).cast(),
+                _mm256_extracti128_si256(*row, 1),
+            );
+        }
+        for i in 0..64 {
+            let zi = ZIGZAG_INV[i] as usize;
+            out_left[zi] = spatial_left[i];
+            out_right[zi] = spatial_right[i];
+        }
+    }
+}
+
+// IDCT row helper
+
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx2")]
+unsafe fn idct_row_avx2(input: __m256i, tab: &[i16; 64]) -> __m256i {
+    use crate::tables::{IRND_INV_ROW, SHIFT_INV_ROW};
+
+    unsafe {
+        let r = _mm256_shufflelo_epi16(input, 0xd8);
+        let p0 = _mm256_shuffle_epi32(r, 0x00);
+        let p1 = _mm256_shuffle_epi32(r, 0x55);
+        let r = _mm256_shufflehi_epi16(r, 0xd8);
+        let p2 = _mm256_shuffle_epi32(r, 0xaa);
+        let p3 = _mm256_shuffle_epi32(r, 0xff);
+
+        let even = _mm256_add_epi32(
+            _mm256_add_epi32(
+                _mm256_madd_epi16(p0, _mm256_loadu_si256(tab.as_ptr().cast())),
+                _mm256_madd_epi16(p2, _mm256_loadu_si256(tab.as_ptr().add(16).cast())),
+            ),
+            _mm256_set1_epi32(IRND_INV_ROW),
+        );
+        let odd = _mm256_add_epi32(
+            _mm256_madd_epi16(p1, _mm256_loadu_si256(tab.as_ptr().add(32).cast())),
+            _mm256_madd_epi16(p3, _mm256_loadu_si256(tab.as_ptr().add(48).cast())),
+        );
+
+        let sum = _mm256_srai_epi32(_mm256_add_epi32(even, odd), SHIFT_INV_ROW);
+        let diff = _mm256_srai_epi32(_mm256_sub_epi32(even, odd), SHIFT_INV_ROW);
+        let diff_rev = _mm256_shuffle_epi32(diff, 0x1b);
+        _mm256_packs_epi32(sum, diff_rev)
+    }
+}
+
+// IDCT column pass
+
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx2")]
+unsafe fn idct_columns_8_avx2(rows: [__m256i; 8], add_val: i16) -> [__m256i; 8] {
+    use crate::tables::{
+        IDCT_COS4, IDCT_TG1, IDCT_TG2, IDCT_TG3, IRND_INV_COL, IRND_INV_CORR, SHIFT_INV_COL,
+    };
+
+    let (r0, r1, r2, r3, r4, r5, r6, r7) = (
+        rows[0], rows[1], rows[2], rows[3], rows[4], rows[5], rows[6], rows[7],
+    );
+
+    let tg1 = _mm256_set1_epi16(IDCT_TG1);
+    let tg2 = _mm256_set1_epi16(IDCT_TG2);
+    let tg3 = _mm256_set1_epi16(IDCT_TG3);
+    let cos4 = _mm256_set1_epi16(IDCT_COS4);
+    let one = _mm256_set1_epi16(1);
+
+    let mut x0 = _mm256_adds_epi16(_mm256_mulhi_epi16(r5, tg3), r5);
+    let x1 = _mm256_adds_epi16(_mm256_mulhi_epi16(r3, tg3), r3);
+    x0 = _mm256_adds_epi16(x0, r3);
+    let x2 = _mm256_subs_epi16(r5, x1);
+    let x5 = _mm256_subs_epi16(_mm256_mulhi_epi16(r1, tg1), r7);
+    let x4 = _mm256_adds_epi16(_mm256_mulhi_epi16(r7, tg1), r1);
+
+    let temp7 = _mm256_adds_epi16(_mm256_adds_epi16(x0, x4), one);
+    let t4 = _mm256_subs_epi16(x4, x0);
+    let t5 = _mm256_adds_epi16(_mm256_subs_epi16(x5, x2), one);
+    let temp3 = _mm256_adds_epi16(x5, x2);
+
+    let s = _mm256_adds_epi16(t4, t5);
+    let d = _mm256_subs_epi16(t4, t5);
+    let m4 = _mm256_or_si256(_mm256_adds_epi16(s, _mm256_mulhi_epi16(cos4, s)), one);
+    let m0 = _mm256_or_si256(_mm256_adds_epi16(_mm256_mulhi_epi16(cos4, d), d), one);
+
+    let e7 = _mm256_adds_epi16(_mm256_mulhi_epi16(r6, tg2), r2);
+    let e3 = _mm256_subs_epi16(_mm256_mulhi_epi16(r2, tg2), r6);
+    let sum04 = _mm256_adds_epi16(r4, r0);
+    let dif04 = _mm256_subs_epi16(r0, r4);
+
+    let rnd_col = _mm256_set1_epi16(IRND_INV_COL as i16);
+    let rnd_corr = _mm256_set1_epi16(IRND_INV_CORR as i16);
+    let b0 = _mm256_adds_epi16(_mm256_adds_epi16(sum04, e7), rnd_col);
+    let b3 = _mm256_adds_epi16(_mm256_subs_epi16(sum04, e7), rnd_corr);
+    let b1 = _mm256_adds_epi16(_mm256_adds_epi16(dif04, e3), rnd_col);
+    let b2 = _mm256_adds_epi16(_mm256_subs_epi16(dif04, e3), rnd_corr);
+
+    let add = _mm256_set1_epi16(add_val);
+    let fin = |v: __m256i| _mm256_adds_epi16(_mm256_srai_epi16(v, SHIFT_INV_COL), add);
+    [
+        fin(_mm256_adds_epi16(temp7, b0)),
+        fin(_mm256_adds_epi16(b1, m4)),
+        fin(_mm256_adds_epi16(b2, m0)),
+        fin(_mm256_adds_epi16(temp3, b3)),
+        fin(_mm256_subs_epi16(b3, temp3)),
+        fin(_mm256_subs_epi16(b2, m0)),
+        fin(_mm256_subs_epi16(b1, m4)),
+        fin(_mm256_subs_epi16(b0, temp7)),
+    ]
+}
+
+// Dual IDCT
+
+/// Inverse zigzag for two adjacent 8×8 blocks (left=lo lane, right=hi lane).
+///
+/// Port of libvmx `VMX_ZIG_INVQUANTIZE_IDCT_8X8_256` shuffle/blend sequence.
+///
+/// # Safety
+/// Caller must enable AVX2.
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx2")]
+unsafe fn inverse_zigzag_8x8_avx2(
+    coeffs_left: &[i16; 64],
+    coeffs_right: &[i16; 64],
+) -> [__m256i; 8] {
+    // SAFETY: AVX2 enabled; both coeff arrays are 64 i16.
+    unsafe {
+        let mut a0 = _mm256_inserti128_si256(
+            _mm256_castsi128_si256(_mm_loadu_si128(coeffs_left.as_ptr().cast())),
+            _mm_loadu_si128(coeffs_right.as_ptr().cast()),
+            1,
+        );
+        let mut a1 = _mm256_inserti128_si256(
+            _mm256_castsi128_si256(_mm_loadu_si128(coeffs_left.as_ptr().add(8).cast())),
+            _mm_loadu_si128(coeffs_right.as_ptr().add(8).cast()),
+            1,
+        );
+        let mut a2 = _mm256_inserti128_si256(
+            _mm256_castsi128_si256(_mm_loadu_si128(coeffs_left.as_ptr().add(16).cast())),
+            _mm_loadu_si128(coeffs_right.as_ptr().add(16).cast()),
+            1,
+        );
+        let mut a3 = _mm256_inserti128_si256(
+            _mm256_castsi128_si256(_mm_loadu_si128(coeffs_left.as_ptr().add(24).cast())),
+            _mm_loadu_si128(coeffs_right.as_ptr().add(24).cast()),
+            1,
+        );
+        let mut a4 = _mm256_inserti128_si256(
+            _mm256_castsi128_si256(_mm_loadu_si128(coeffs_left.as_ptr().add(32).cast())),
+            _mm_loadu_si128(coeffs_right.as_ptr().add(32).cast()),
+            1,
+        );
+        let mut a5 = _mm256_inserti128_si256(
+            _mm256_castsi128_si256(_mm_loadu_si128(coeffs_left.as_ptr().add(40).cast())),
+            _mm_loadu_si128(coeffs_right.as_ptr().add(40).cast()),
+            1,
+        );
+        let a6_src = _mm256_inserti128_si256(
+            _mm256_castsi128_si256(_mm_loadu_si128(coeffs_left.as_ptr().add(48).cast())),
+            _mm_loadu_si128(coeffs_right.as_ptr().add(48).cast()),
+            1,
+        );
+        let a7_src = _mm256_inserti128_si256(
+            _mm256_castsi128_si256(_mm_loadu_si128(coeffs_left.as_ptr().add(56).cast())),
+            _mm_loadu_si128(coeffs_right.as_ptr().add(56).cast()),
+            1,
+        );
+
+        // Lane-duplicated pshufb controls (same 16 bytes in lo/hi).
+        let mut v0 = _mm256_shuffle_epi8(
+            a0,
+            _mm256_set_epi8(
+                7, 6, 15, 14, 9, 8, 5, 4, 13, 12, 11, 10, 3, 2, 1, 0, 7, 6, 15, 14, 9, 8, 5, 4, 13,
+                12, 11, 10, 3, 2, 1, 0,
+            ),
+        );
+        let v1 = _mm256_shuffle_epi8(
+            a1,
+            _mm256_set_epi8(
+                7, 6, 3, 2, 15, 14, 13, 12, 11, 10, 9, 8, 1, 0, 5, 4, 7, 6, 3, 2, 15, 14, 13, 12,
+                11, 10, 9, 8, 1, 0, 5, 4,
+            ),
+        );
+        let mut v3 = _mm256_shuffle_epi8(
+            a3,
+            _mm256_set_epi8(
+                9, 8, 7, 6, 13, 12, 3, 2, 11, 10, 5, 4, 15, 14, 1, 0, 9, 8, 7, 6, 13, 12, 3, 2, 11,
+                10, 5, 4, 15, 14, 1, 0,
+            ),
+        );
+
+        a0 = _mm256_blend_epi16::<0x30>(v0, v1);
+        a0 = _mm256_blend_epi16::<0xC0>(a0, v3);
+
+        let mut v2 = _mm256_shuffle_epi8(
+            a2,
+            _mm256_set_epi8(
+                5, 4, 13, 12, 9, 8, 1, 0, 3, 2, 15, 14, 7, 6, 11, 10, 5, 4, 13, 12, 9, 8, 1, 0, 3,
+                2, 15, 14, 7, 6, 11, 10,
+            ),
+        );
+        let mut v5 = _mm256_shuffle_epi8(
+            a5,
+            _mm256_set_epi8(
+                7, 6, 3, 2, 11, 10, 13, 12, 15, 14, 5, 4, 9, 8, 1, 0, 7, 6, 3, 2, 11, 10, 13, 12,
+                15, 14, 5, 4, 9, 8, 1, 0,
+            ),
+        );
+
+        a2 = _mm256_srli_si256::<14>(v0);
+        a2 = _mm256_blend_epi16::<0x30>(a2, v3);
+        a2 = _mm256_blend_epi16::<0x6>(a2, v1);
+        a2 = _mm256_blend_epi16::<0x8>(a2, v2);
+        a2 = _mm256_blend_epi16::<0xC0>(a2, v5);
+
+        v3 = _mm256_slli_si256::<6>(v3);
+        let mut v4 = _mm256_shuffle_epi8(
+            a4,
+            _mm256_set_epi8(
+                13, 12, 3, 2, 5, 4, 15, 14, 1, 0, 11, 10, 9, 8, 7, 6, 13, 12, 3, 2, 5, 4, 15, 14,
+                1, 0, 11, 10, 9, 8, 7, 6,
+            ),
+        );
+
+        v0 = _mm256_srli_si256::<8>(v0);
+        a1 = _mm256_blend_epi16::<0x8>(v0, v1);
+        a1 = _mm256_blend_epi16::<0x10>(a1, v2);
+        a1 = _mm256_blend_epi16::<0x60>(a1, v3);
+
+        let v6 = _mm256_shuffle_epi8(
+            a6_src,
+            _mm256_set_epi8(
+                13, 12, 9, 8, -1, -1, 5, 4, 3, 2, 1, 0, -1, -1, -1, -1, 13, 12, 9, 8, -1, -1, 5, 4,
+                3, 2, 1, 0, -1, -1, -1, -1,
+            ),
+        );
+        let v7 = _mm256_shuffle_epi8(
+            a7_src,
+            _mm256_set_epi8(
+                15, 14, 13, 12, 5, 4, 3, 2, 11, 10, 7, 6, 1, 0, 9, 8, 15, 14, 13, 12, 5, 4, 3, 2,
+                11, 10, 7, 6, 1, 0, 9, 8,
+            ),
+        );
+
+        a4 = _mm256_blend_epi16::<0xC0>(v1, v6);
+        a4 = _mm256_blend_epi16::<0x6>(a4, v2);
+        a4 = _mm256_blend_epi16::<0x18>(a4, v4);
+        a4 = _mm256_blend_epi16::<0x20>(a4, v5);
+
+        let x6 = _mm256_shuffle_epi8(
+            a6_src,
+            _mm256_set_epi8(
+                11, 10, 15, 14, 7, 6, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, 11, 10, 15, 14, 7, 6,
+                -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+            ),
+        );
+
+        a3 = _mm256_srli_si256::<12>(v1);
+        a3 = _mm256_blend_epi16::<0x18>(a3, v3);
+        a3 = _mm256_blend_epi16::<0x80>(a3, x6);
+
+        let mut a7 = _mm256_blend_epi16::<0x3>(v7, v4);
+        a7 = _mm256_blend_epi16::<0xC>(a7, v6);
+
+        let mut a6 = _mm256_slli_si256::<8>(v7);
+        a6 = _mm256_blend_epi16::<0x4>(a6, v4);
+        a6 = _mm256_blend_epi16::<0x10>(a6, v6);
+        a6 = _mm256_blend_epi16::<0x8>(a6, v5);
+        a6 = _mm256_blend_epi16::<0x1>(a6, v2);
+
+        v4 = _mm256_srli_si256::<8>(v4);
+
+        v2 = _mm256_srli_si256::<10>(v2);
+        a5 = _mm256_slli_si256::<14>(v7);
+        a5 = _mm256_blend_epi16::<0xC>(a5, v4);
+        a5 = _mm256_blend_epi16::<0x3>(a5, v2);
+        a5 = _mm256_blend_epi16::<0x10>(a5, v5);
+        a5 = _mm256_blend_epi16::<0x60>(a5, x6);
+
+        a6 = _mm256_blend_epi16::<0x2>(a6, v4);
+        a3 = _mm256_blend_epi16::<0x4>(a3, v2);
+
+        v5 = _mm256_slli_si256::<10>(v5);
+        a3 = _mm256_blend_epi16::<0x60>(a3, v5);
+        a1 = _mm256_blend_epi16::<0x80>(a1, v5);
+
+        [a0, a1, a2, a3, a4, a5, a6, a7]
+    }
+}
+
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx2")]
+unsafe fn zig_invquant_idct_avx2(
+    coeffs_left: &mut [i16; 64],
+    coeffs_right: &mut [i16; 64],
+    decode_matrix: &[u16],
+    dst: *mut u8,
+    stride: usize,
+    add_val: i16,
+) {
+    use crate::tables::IDCT_ROW_TABLES_256;
+
+    unsafe {
+        let spatial = inverse_zigzag_8x8_avx2(coeffs_left, coeffs_right);
+
+        let mut dct_rows = [_mm256_setzero_si256(); 8];
+        for (ri, dct_row) in dct_rows.iter_mut().enumerate() {
+            let m128 = _mm_loadu_si128(decode_matrix.as_ptr().add(ri * 8).cast());
+            let m = _mm256_inserti128_si256(_mm256_castsi128_si256(m128), m128, 1);
+            *dct_row = _mm256_srai_epi16(_mm256_mullo_epi16(spatial[ri], m), 4);
+        }
+
+        for row in 0..8 {
+            dct_rows[row] = idct_row_avx2(dct_rows[row], IDCT_ROW_TABLES_256[row]);
+        }
+
+        let out_rows = idct_columns_8_avx2(dct_rows, add_val);
+
+        for (y, out_row) in out_rows.iter().enumerate() {
+            let packed = _mm256_packus_epi16(*out_row, *out_row);
+            _mm_storel_epi64(dst.add(y * stride).cast(), _mm256_castsi256_si128(packed));
+            _mm_storel_epi64(
+                dst.add(y * stride + 8).cast(),
+                _mm256_extracti128_si256(packed, 1),
+            );
+        }
+    }
+}
+
+/// Encode using AVX2+BMI2 when available.
 pub fn encode_plane(
     plane: &PlaneView<'_>,
     dc: &mut SliceData,
@@ -40,7 +519,7 @@ pub fn encode_plane(
     encode_plane_scalar(plane, dc, ac, encode_matrix, dc_shift, temp_block);
 }
 
-/// Decode using AVX2+BMI2 when available; falls back to scalar.
+/// Decode using AVX2+BMI2 when available.
 pub fn decode_plane(
     plane: &mut PlaneView<'_>,
     dc: &mut SliceData,
@@ -103,20 +582,15 @@ unsafe fn encode_plane_avx2(
                 let dual = x + 16 <= stride && src_off + 7 * stride + 16 <= plane.data.len();
 
                 if dual {
-                    fdct_quant_zig_sse(
+                    fdct_quant_zig_avx2(
                         plane.data.as_ptr().add(src_off),
                         stride,
                         encode_matrix.as_ptr(),
                         add_val,
                         temp_block,
-                    );
-                    fdct_quant_zig_sse(
-                        plane.data.as_ptr().add(src_off + 8),
-                        stride,
-                        encode_matrix.as_ptr(),
-                        add_val,
                         &mut temp_block2,
                     );
+                    used_avx256 = true;
                     encode_fdct_block_avx2(
                         temp_block,
                         dc,
@@ -180,33 +654,18 @@ unsafe fn encode_plane_avx2(
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx2,bmi2")]
 unsafe fn ac_nonzero_mask_avx2(coeffs: &[i16; 64]) -> u64 {
-    // SAFETY: AVX2 enabled; `coeffs` is 64 elements.
+    // SAFETY: AVX2+BMI2 enabled; `coeffs` is 64 elements.
     unsafe {
         let zero = _mm256_setzero_si256();
-        let base = coeffs.as_ptr().add(1);
         let mut mask = 0u64;
-
-        // Indices 1..48 (three full 16-lane chunks).
-        for chunk in 0..3 {
-            let offset = chunk * 16;
-            let v = _mm256_loadu_si256(base.add(offset).cast());
+        for chunk in 0..4 {
+            let v = _mm256_loadu_si256(coeffs.as_ptr().add(chunk * 16).cast());
             let eq = _mm256_cmpeq_epi16(v, zero);
             let eq_mask = _mm256_movemask_epi8(eq) as u32;
-            for i in 0..16 {
-                if (eq_mask & (3u32 << (2 * i))) != (3u32 << (2 * i)) {
-                    mask |= 1u64 << (1 + offset + i);
-                }
-            }
+            let is_zero = _pext_u32(eq_mask, 0x5555_5555);
+            mask |= u64::from((!is_zero) & 0xFFFF) << (chunk * 16);
         }
-
-        // Indices 49..63 (tail — avoid loading past the array end).
-        for (i, &coeff) in coeffs.iter().enumerate().take(64).skip(49) {
-            if coeff != 0 {
-                mask |= 1u64 << i;
-            }
-        }
-
-        mask
+        mask & !1
     }
 }
 
@@ -314,33 +773,49 @@ unsafe fn decode_plane_avx2(
                         dc_shift,
                     );
 
-                    if valid0 {
-                        zig_invquant_idct_sse(
+                    if valid0 && valid1 {
+                        zig_invquant_idct_avx2(
                             temp_block,
+                            &mut temp_block2,
                             decode_matrix,
                             plane.data.as_mut_ptr().add(dst_off),
                             stride,
                             add_val,
                         );
                     } else {
-                        broadcast_dc(temp_block[0], &mut plane.data[dst_off..], stride, add_val);
-                    }
+                        if valid0 {
+                            zig_invquant_idct_sse(
+                                temp_block,
+                                decode_matrix,
+                                plane.data.as_mut_ptr().add(dst_off),
+                                stride,
+                                add_val,
+                            );
+                        } else {
+                            broadcast_dc(
+                                temp_block[0],
+                                &mut plane.data[dst_off..],
+                                stride,
+                                add_val,
+                            );
+                        }
 
-                    if valid1 {
-                        zig_invquant_idct_sse(
-                            &mut temp_block2,
-                            decode_matrix,
-                            plane.data.as_mut_ptr().add(dst_off + 8),
-                            stride,
-                            add_val,
-                        );
-                    } else {
-                        broadcast_dc(
-                            temp_block2[0],
-                            &mut plane.data[dst_off + 8..],
-                            stride,
-                            add_val,
-                        );
+                        if valid1 {
+                            zig_invquant_idct_sse(
+                                &mut temp_block2,
+                                decode_matrix,
+                                plane.data.as_mut_ptr().add(dst_off + 8),
+                                stride,
+                                add_val,
+                            );
+                        } else {
+                            broadcast_dc(
+                                temp_block2[0],
+                                &mut plane.data[dst_off + 8..],
+                                stride,
+                                add_val,
+                            );
+                        }
                     }
 
                     x += 16;
@@ -487,7 +962,145 @@ mod tests {
             unsafe { ac_nonzero_mask_avx2(&coeffs) },
             ac_nonzero_mask_scalar(&coeffs)
         );
+
+        coeffs.fill(1);
+        assert_eq!(
+            unsafe { ac_nonzero_mask_avx2(&coeffs) },
+            ac_nonzero_mask_scalar(&coeffs)
+        );
+
+        coeffs.fill(0);
+        coeffs[63] = -7;
+        assert_eq!(
+            unsafe { ac_nonzero_mask_avx2(&coeffs) },
+            ac_nonzero_mask_scalar(&coeffs)
+        );
     }
 
     // Bitstream identity vs scalar is covered by `simd::path_tests::avx2_encode_matches_scalar_when_available`.
+
+    #[test]
+    fn dual_fdct_avx2_matches_sse_x2() {
+        if !is_x86_feature_detected!("avx2") {
+            return;
+        }
+        use crate::simd::sse128::fdct_quant_zig_sse;
+
+        let stride = 24;
+        let mut src = [0u8; 8 * 24];
+        for (i, pixel) in src.iter_mut().enumerate() {
+            *pixel = ((i * 73 + 19) % 256) as u8;
+        }
+        let mut matrix = [0u16; 192];
+        for i in 0..64 {
+            matrix[i] = (i as u16 % 17) + 1;
+            matrix[64 + i] = u16::MAX;
+            matrix[128 + i] = u16::MAX;
+        }
+
+        for add_val in [-128i16, 0] {
+            let mut expected_left = [0i16; 64];
+            let mut expected_right = [0i16; 64];
+            unsafe {
+                fdct_quant_zig_sse(
+                    src.as_ptr(),
+                    stride,
+                    matrix.as_ptr(),
+                    add_val,
+                    &mut expected_left,
+                );
+                fdct_quant_zig_sse(
+                    src.as_ptr().add(8),
+                    stride,
+                    matrix.as_ptr(),
+                    add_val,
+                    &mut expected_right,
+                );
+            }
+
+            let mut actual_left = [0i16; 64];
+            let mut actual_right = [0i16; 64];
+            unsafe {
+                super::fdct_quant_zig_avx2(
+                    src.as_ptr(),
+                    stride,
+                    matrix.as_ptr(),
+                    add_val,
+                    &mut actual_left,
+                    &mut actual_right,
+                );
+            }
+
+            assert_eq!(
+                actual_left, expected_left,
+                "left block mismatch (add_val={add_val})"
+            );
+            assert_eq!(
+                actual_right, expected_right,
+                "right block mismatch (add_val={add_val})"
+            );
+        }
+    }
+
+    #[test]
+    fn dual_idct_avx2_matches_sse_x2() {
+        if !is_x86_feature_detected!("avx2")
+            || !is_x86_feature_detected!("sse4.1")
+            || !is_x86_feature_detected!("ssse3")
+        {
+            return;
+        }
+        use crate::simd::sse128::zig_invquant_idct_sse;
+
+        for add_val in [0i16, 128] {
+            for seed in 0..8usize {
+                let mut coeffs_l = [0i16; 64];
+                let mut coeffs_r = [0i16; 64];
+                for (i, c) in coeffs_l.iter_mut().enumerate() {
+                    *c = (((i + seed) as i16) % 11) - 5;
+                }
+                for (i, c) in coeffs_r.iter_mut().enumerate() {
+                    *c = (((i + seed + 3) as i16) % 13) - 6;
+                }
+                let mut matrix = [0u16; 64];
+                for (i, m) in matrix.iter_mut().enumerate() {
+                    *m = ((i as u16 + seed as u16) % 13) + 1;
+                }
+
+                let stride = 32;
+                let mut dst_sse = [0u8; 8 * 32];
+                let mut cl = coeffs_l;
+                let mut cr = coeffs_r;
+                unsafe {
+                    zig_invquant_idct_sse(&mut cl, &matrix, dst_sse.as_mut_ptr(), stride, add_val);
+                    zig_invquant_idct_sse(
+                        &mut cr,
+                        &matrix,
+                        dst_sse.as_mut_ptr().add(8),
+                        stride,
+                        add_val,
+                    );
+                }
+
+                let mut dst_avx = [0u8; 8 * 32];
+                let mut cl = coeffs_l;
+                let mut cr = coeffs_r;
+                unsafe {
+                    super::zig_invquant_idct_avx2(
+                        &mut cl,
+                        &mut cr,
+                        &matrix,
+                        dst_avx.as_mut_ptr(),
+                        stride,
+                        add_val,
+                    );
+                }
+
+                assert_eq!(
+                    dst_avx, dst_sse,
+                    "IDCT mismatch (add_val={add_val} seed={seed})"
+                );
+            }
+        }
+    }
 }

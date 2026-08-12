@@ -13,9 +13,12 @@
 //! - Hot-path slice encode/decode must use the path fixed at [`crate::Codec`] creation —
 //!   do not re-run CPUID inside plane loops.
 //! - The SSE4.2 encoder uses an intrinsic FDCT/quantization path. SSE4.1 decode uses
-//!   SIMD dequant + packus with scalar IDCT row/column oracles for bit-exactness.
+//!   SIMD inverse zigzag + dequant + IDCT row/column + packus; scalar
+//!   `zig_invquant_idct` remains the bit-exact oracle/fallback.
 //! - AVX2 / NEON plane kernels must remain bit-compatible with the scalar oracle.
-//! - UYVY↔planar color conversion uses SSSE3/SSE2 when available.
+//! - UYVY↔planar uses x86 SSSE3/SSE2 when available. BGRA→YUV encode uses SSSE3
+//!   even when [`crate::color::simd::ColorSimdPath`] reports `Avx2` (no AVX2 BGRA
+//!   encode; matches libvmx). YUV→BGRA pack can use real AVX2.
 //! - Slice encode/decode run on a CPU thread pool sized from host parallelism
 //!   (not an async runtime — Tokio is for I/O only).
 

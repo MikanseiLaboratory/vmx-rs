@@ -16,6 +16,7 @@ mod tables;
 mod thread_pool;
 mod types;
 
+pub use color::ColorSimdPath;
 pub use container::preview_bitstream_length;
 pub use error::{Result, VmxError};
 pub use instance::{Codec, Config};

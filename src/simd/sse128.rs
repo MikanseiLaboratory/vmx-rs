@@ -1,5 +1,8 @@
-//! SSE4.2 / SSSE3 encode path (x86_64 only; other targets use scalar via the
-//! public `encode_plane` / `decode_plane` entry points).
+//! SSE4.2 / SSSE3 encode and SSE4.1 / SSSE3 decode path (x86_64 only; other
+//! targets use scalar via the public `encode_plane` / `decode_plane` entry points).
+//!
+//! Encode: FDCT + quant + zigzag (SSE4.2). Decode: inverse zigzag + dequant +
+//! IDCT + packus (SSSE3 + SSE4.1).
 //!
 //! Safety: all `std::arch::x86_64` usage must be gated by `is_x86_feature_detected!`
 //! and only operate on buffers with verified lengths. Matrix loads are explicitly
@@ -192,6 +195,25 @@ pub unsafe fn fdct_quant_zig_sse(
     }
 }
 
+/// Build a 64-bit mask of nonzero AC coefficients (bit `i` set when `coeffs[i] != 0`).
+/// Bit 0 (DC) is always clear.
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "sse4.2")]
+unsafe fn ac_nonzero_mask_sse(coeffs: &[i16; 64]) -> u64 {
+    unsafe {
+        let zero = _mm_setzero_si128();
+        let mut mask = 0u64;
+        for chunk in 0..8 {
+            let v = _mm_loadu_si128(coeffs.as_ptr().add(chunk * 8).cast());
+            let eq = _mm_cmpeq_epi16(v, zero);
+            let packed = _mm_packs_epi16(eq, zero);
+            let is_zero = _mm_movemask_epi8(packed) as u8;
+            mask |= u64::from(!is_zero) << (chunk * 8);
+        }
+        mask & !1
+    }
+}
+
 /// Encode using SSE128 when available; falls back to scalar.
 pub fn encode_plane(
     plane: &PlaneView<'_>,
@@ -257,12 +279,7 @@ unsafe fn encode_plane_sse(
                     temp_block,
                 );
                 let dc_val = temp_block[0].wrapping_add(dc_round) >> dc_shift;
-                let mut m_index = 0u64;
-                for (i, coeff) in temp_block.iter().enumerate().skip(1) {
-                    if *coeff != 0 {
-                        m_index |= 1u64 << i;
-                    }
-                }
+                let m_index = ac_nonzero_mask_sse(temp_block);
                 dc.encode_dc(dc_val.wrapping_sub(dc_pred));
                 dc.emit_bits32();
                 dc_pred = dc_val;
@@ -312,7 +329,7 @@ pub fn decode_plane(
 ) {
     #[cfg(target_arch = "x86_64")]
     {
-        if is_x86_feature_detected!("sse4.1") {
+        if is_x86_feature_detected!("sse4.1") && is_x86_feature_detected!("ssse3") {
             return decode_plane_sse(plane, dc, ac, decode_matrix, dc_shift, temp_block);
         }
     }
@@ -418,12 +435,127 @@ fn decode_plane_sse(
     ac.flush_remaining_read_bits();
 }
 
-/// SSE4.1 inverse zigzag + dequant + IDCT (matches scalar `zig_invquant_idct`).
+/// Inverse zigzag (entropy → spatial) for one 8×8 block.
+///
+/// Port of libvmx `VMX_ZIG_INVQUANTIZE_IDCT_8X8_128` shuffle/blend (~2327–2404).
+/// Bit-identical to scalar gather via [`crate::tables::ZIGZAG_INV`].
 ///
 /// # Safety
-/// Caller must have detected SSE4.1. `dst` must cover an 8×8 block at `stride`.
+/// Caller must enable SSSE3+SSE4.1.
 #[cfg(target_arch = "x86_64")]
-#[target_feature(enable = "sse4.1")]
+#[target_feature(enable = "ssse3,sse4.1")]
+unsafe fn inverse_zigzag_8x8_sse(coeffs: &[i16; 64]) -> [__m128i; 8] {
+    // SAFETY: SSSE3+SSE4.1 enabled; coeffs is 64 i16.
+    unsafe {
+        let mut a0 = _mm_loadu_si128(coeffs.as_ptr().cast());
+        let mut a1 = _mm_loadu_si128(coeffs.as_ptr().add(8).cast());
+        let mut a2 = _mm_loadu_si128(coeffs.as_ptr().add(16).cast());
+        let mut a3 = _mm_loadu_si128(coeffs.as_ptr().add(24).cast());
+        let mut a4 = _mm_loadu_si128(coeffs.as_ptr().add(32).cast());
+        let mut a5 = _mm_loadu_si128(coeffs.as_ptr().add(40).cast());
+        let a6_src = _mm_loadu_si128(coeffs.as_ptr().add(48).cast());
+        let a7_src = _mm_loadu_si128(coeffs.as_ptr().add(56).cast());
+
+        let mut v0 = _mm_shuffle_epi8(
+            a0,
+            _mm_set_epi8(7, 6, 15, 14, 9, 8, 5, 4, 13, 12, 11, 10, 3, 2, 1, 0),
+        );
+        let v1 = _mm_shuffle_epi8(
+            a1,
+            _mm_set_epi8(7, 6, 3, 2, 15, 14, 13, 12, 11, 10, 9, 8, 1, 0, 5, 4),
+        );
+        let mut v3 = _mm_shuffle_epi8(
+            a3,
+            _mm_set_epi8(9, 8, 7, 6, 13, 12, 3, 2, 11, 10, 5, 4, 15, 14, 1, 0),
+        );
+
+        a0 = _mm_blend_epi16::<0x30>(v0, v1);
+        a0 = _mm_blend_epi16::<0xC0>(a0, v3);
+
+        let mut v2 = _mm_shuffle_epi8(
+            a2,
+            _mm_set_epi8(5, 4, 13, 12, 9, 8, 1, 0, 3, 2, 15, 14, 7, 6, 11, 10),
+        );
+        let mut v5 = _mm_shuffle_epi8(
+            a5,
+            _mm_set_epi8(7, 6, 3, 2, 11, 10, 13, 12, 15, 14, 5, 4, 9, 8, 1, 0),
+        );
+
+        a2 = _mm_srli_si128::<14>(v0);
+        a2 = _mm_blend_epi16::<0x30>(a2, v3);
+        a2 = _mm_blend_epi16::<0x6>(a2, v1);
+        a2 = _mm_blend_epi16::<0x8>(a2, v2);
+        a2 = _mm_blend_epi16::<0xC0>(a2, v5);
+
+        v3 = _mm_slli_si128::<6>(v3);
+        let mut v4 = _mm_shuffle_epi8(
+            a4,
+            _mm_set_epi8(13, 12, 3, 2, 5, 4, 15, 14, 1, 0, 11, 10, 9, 8, 7, 6),
+        );
+
+        v0 = _mm_srli_si128::<8>(v0);
+        a1 = _mm_blend_epi16::<0x8>(v0, v1);
+        a1 = _mm_blend_epi16::<0x10>(a1, v2);
+        a1 = _mm_blend_epi16::<0x60>(a1, v3);
+
+        let v6 = _mm_shuffle_epi8(
+            a6_src,
+            _mm_set_epi8(13, 12, 9, 8, -1, -1, 5, 4, 3, 2, 1, 0, -1, -1, -1, -1),
+        );
+        let v7 = _mm_shuffle_epi8(
+            a7_src,
+            _mm_set_epi8(15, 14, 13, 12, 5, 4, 3, 2, 11, 10, 7, 6, 1, 0, 9, 8),
+        );
+
+        a4 = _mm_blend_epi16::<0xC0>(v1, v6);
+        a4 = _mm_blend_epi16::<0x6>(a4, v2);
+        a4 = _mm_blend_epi16::<0x18>(a4, v4);
+        a4 = _mm_blend_epi16::<0x20>(a4, v5);
+
+        let x6 = _mm_shuffle_epi8(
+            a6_src,
+            _mm_set_epi8(11, 10, 15, 14, 7, 6, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1),
+        );
+
+        a3 = _mm_srli_si128::<12>(v1);
+        a3 = _mm_blend_epi16::<0x18>(a3, v3);
+        a3 = _mm_blend_epi16::<0x80>(a3, x6);
+
+        let mut a7 = _mm_blend_epi16::<0x3>(v7, v4);
+        a7 = _mm_blend_epi16::<0xC>(a7, v6);
+
+        let mut a6 = _mm_slli_si128::<8>(v7);
+        a6 = _mm_blend_epi16::<0x4>(a6, v4);
+        a6 = _mm_blend_epi16::<0x10>(a6, v6);
+        a6 = _mm_blend_epi16::<0x8>(a6, v5);
+        a6 = _mm_blend_epi16::<0x1>(a6, v2);
+
+        v4 = _mm_srli_si128::<8>(v4);
+
+        v2 = _mm_srli_si128::<10>(v2);
+        a5 = _mm_slli_si128::<14>(v7);
+        a5 = _mm_blend_epi16::<0xC>(a5, v4);
+        a5 = _mm_blend_epi16::<0x3>(a5, v2);
+        a5 = _mm_blend_epi16::<0x10>(a5, v5);
+        a5 = _mm_blend_epi16::<0x60>(a5, x6);
+
+        a6 = _mm_blend_epi16::<0x2>(a6, v4);
+        a3 = _mm_blend_epi16::<0x4>(a3, v2);
+
+        v5 = _mm_slli_si128::<10>(v5);
+        a3 = _mm_blend_epi16::<0x60>(a3, v5);
+        a1 = _mm_blend_epi16::<0x80>(a1, v5);
+
+        [a0, a1, a2, a3, a4, a5, a6, a7]
+    }
+}
+
+/// SSE4.1/SSSE3 inverse zigzag + dequant + IDCT (matches scalar `zig_invquant_idct`).
+///
+/// # Safety
+/// Caller must have detected SSSE3 and SSE4.1. `dst` must cover an 8×8 block at `stride`.
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "ssse3,sse4.1")]
 pub unsafe fn zig_invquant_idct_sse(
     coeffs: &mut [i16; 64],
     decode_matrix: &[u16],
@@ -431,94 +563,162 @@ pub unsafe fn zig_invquant_idct_sse(
     stride: usize,
     add_val: i16,
 ) {
-    use crate::codec::dct::idct_column;
-    use crate::tables::{IDCT_ROW_TABLES, ZIGZAG_INV};
+    use crate::tables::IDCT_ROW_TABLES;
 
-    // SAFETY: SSE4.1 enabled; decode_matrix has 64 entries from codec presets.
+    // SAFETY: SSSE3+SSE4.1 enabled; decode_matrix has 64 entries from codec presets.
     unsafe {
-        let mut spatial = [0i16; 64];
-        for i in 0..64 {
-            spatial[i] = coeffs[ZIGZAG_INV[i] as usize];
-        }
+        let spatial = inverse_zigzag_8x8_sse(coeffs);
 
-        // Dequant: 8 lanes × 8 rows via mullo + srai.
+        // Dequant: 8 lanes × 8 rows via mullo + srai, then IDCT rows.
+        let mut rows = [_mm_setzero_si128(); 8];
         for row in 0..8 {
-            let c = _mm_loadu_si128(spatial.as_ptr().add(row * 8).cast::<__m128i>());
             let m = _mm_loadu_si128(decode_matrix.as_ptr().add(row * 8).cast::<__m128i>());
-            let q = _mm_srai_epi16(_mm_mullo_epi16(c, m), 4);
-            _mm_storeu_si128(spatial.as_mut_ptr().add(row * 8).cast::<__m128i>(), q);
+            let q = _mm_srai_epi16(_mm_mullo_epi16(spatial[row], m), 4);
+            rows[row] = idct_row_sse_vec(q, IDCT_ROW_TABLES[row]);
         }
 
-        let mut rows = [[0i16; 8]; 8];
-        for y in 0..8 {
-            let mut row = [0i16; 8];
-            row.copy_from_slice(&spatial[y * 8..y * 8 + 8]);
-            rows[y] = idct_row_sse(row, IDCT_ROW_TABLES[y]);
-        }
-
-        let add = _mm_set1_epi16(add_val);
-        let mut out_rows = [[0i16; 8]; 8];
-        for x in 0..8 {
-            let col = [
-                rows[0][x], rows[1][x], rows[2][x], rows[3][x], rows[4][x], rows[5][x], rows[6][x],
-                rows[7][x],
-            ];
-            let out = idct_column(col, 0);
-            for y in 0..8 {
-                out_rows[y][x] = out[y];
-            }
-        }
-
+        let out_rows = idct_columns_8_sse(rows, add_val);
         for (y, row) in out_rows.iter().enumerate() {
-            let v = _mm_loadu_si128(row.as_ptr().cast::<__m128i>());
-            let v = _mm_adds_epi16(v, add);
-            let bytes = _mm_packus_epi16(v, v);
+            let bytes = _mm_packus_epi16(*row, *row);
             _mm_storel_epi64(dst.add(y * stride).cast::<__m128i>(), bytes);
         }
     }
 }
 
 /// SSE4.1 IDCT row — bit-compatible with scalar `idct_row` via the same madd layout.
+///
+/// # Safety
+/// Caller must enable SSE4.1; `tab` must contain 32 `i16` values.
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "sse4.1")]
 unsafe fn idct_row_sse(x: [i16; 8], tab: &[i16; 32]) -> [i16; 8] {
-    use crate::tables::{IRND_INV_ROW, SHIFT_INV_ROW};
-    // Match scalar: for i in 0..4
-    //   even = madd(x0,tab[2i],x2,tab[2i+1]) + IRND + madd(x4,tab[8+2i],x6,tab[8+2i+1])
-    //   odd  = madd(x5,tab[24+2i],x7,tab[24+2i+1]) + madd(x1,tab[16+2i],x3,tab[16+2i+1])
-    // SAFETY: caller enabled SSE4.1; tab length 32.
-    let x0 = _mm_set1_epi32(x[0] as i32);
-    let x1 = _mm_set1_epi32(x[1] as i32);
-    let x2 = _mm_set1_epi32(x[2] as i32);
-    let x3 = _mm_set1_epi32(x[3] as i32);
-    let x4 = _mm_set1_epi32(x[4] as i32);
-    let x5 = _mm_set1_epi32(x[5] as i32);
-    let x6 = _mm_set1_epi32(x[6] as i32);
-    let x7 = _mm_set1_epi32(x[7] as i32);
+    // SAFETY: target_feature enables SSE4.1 for this function body.
+    let input = unsafe { _mm_loadu_si128(x.as_ptr().cast::<__m128i>()) };
+    let v = unsafe { idct_row_sse_vec(input, tab) };
+    let mut out = [0i16; 8];
+    unsafe {
+        _mm_storeu_si128(out.as_mut_ptr().cast::<__m128i>(), v);
+    }
+    out
+}
 
-    // Build tab lanes for i=0..3 as four i32 products manually — keep scalar for oracle.
-    // Full vectorized tab broadcast is complex; use scalar idct_row which is already
-    // the verified oracle, and rely on SIMD dequant + packus for the measurable win.
-    let _ = (
-        x0,
-        x1,
-        x2,
-        x3,
-        x4,
-        x5,
-        x6,
-        x7,
-        IRND_INV_ROW,
-        SHIFT_INV_ROW,
-        tab,
+/// Vector form of [`idct_row_sse`].
+///
+/// # Safety
+/// Caller must enable SSE4.1; `tab` must contain 32 `i16` values.
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "sse4.1")]
+unsafe fn idct_row_sse_vec(input: __m128i, tab: &[i16; 32]) -> __m128i {
+    use crate::tables::{IRND_INV_ROW, SHIFT_INV_ROW};
+
+    // SAFETY: caller enabled SSE4.1; tab length 32.
+    unsafe {
+        // Broadcast (x0,x2), (x1,x3), (x4,x6), (x5,x7) pairs for madd, matching
+        // the AVX2 `idct_row_avx2` shuffle layout (and scalar `idct_row`).
+        let r = _mm_shufflelo_epi16(input, 0xd8);
+        let p0 = _mm_shuffle_epi32(r, 0x00);
+        let p1 = _mm_shuffle_epi32(r, 0x55);
+        let r = _mm_shufflehi_epi16(r, 0xd8);
+        let p2 = _mm_shuffle_epi32(r, 0xaa);
+        let p3 = _mm_shuffle_epi32(r, 0xff);
+
+        let even = _mm_add_epi32(
+            _mm_add_epi32(
+                _mm_madd_epi16(p0, _mm_loadu_si128(tab.as_ptr().cast::<__m128i>())),
+                _mm_madd_epi16(p2, _mm_loadu_si128(tab.as_ptr().add(8).cast::<__m128i>())),
+            ),
+            _mm_set1_epi32(IRND_INV_ROW),
+        );
+        let odd = _mm_add_epi32(
+            _mm_madd_epi16(p1, _mm_loadu_si128(tab.as_ptr().add(16).cast::<__m128i>())),
+            _mm_madd_epi16(p3, _mm_loadu_si128(tab.as_ptr().add(24).cast::<__m128i>())),
+        );
+
+        let sum = _mm_srai_epi32(_mm_add_epi32(even, odd), SHIFT_INV_ROW);
+        let diff = _mm_srai_epi32(_mm_sub_epi32(even, odd), SHIFT_INV_ROW);
+        // out = [s0,s1,s2,s3, d3,d2,d1,d0] because out[7-i] = diff[i]
+        let lo = _mm_packs_epi32(sum, sum);
+        let hi = _mm_packs_epi32(diff, diff);
+        let rev = _mm_shufflelo_epi16(hi, 0b00_01_10_11);
+        _mm_unpacklo_epi64(lo, rev)
+    }
+}
+
+/// SSE4.1 IDCT column pass over eight columns in parallel (each lane is one column).
+///
+/// Matches scalar `idct_column(col, add_val)` lane-wise, including saturating
+/// arithmetic, `| 1`, and asymmetric rounding constants.
+///
+/// # Safety
+/// Caller must enable SSE4.1.
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "sse4.1")]
+unsafe fn idct_columns_8_sse(rows: [__m128i; 8], add_val: i16) -> [__m128i; 8] {
+    use crate::tables::{
+        IDCT_COS4, IDCT_TG1, IDCT_TG2, IDCT_TG3, IRND_INV_COL, IRND_INV_CORR, SHIFT_INV_COL,
+    };
+
+    // SAFETY: SSE4.1 enabled; rows cover a full 8×8 block.
+    let (r0, r1, r2, r3, r4, r5, r6, r7) = (
+        rows[0], rows[1], rows[2], rows[3], rows[4], rows[5], rows[6], rows[7],
     );
-    crate::codec::dct::idct_row(x, tab)
+
+    let tg1 = _mm_set1_epi16(IDCT_TG1);
+    let tg2 = _mm_set1_epi16(IDCT_TG2);
+    let tg3 = _mm_set1_epi16(IDCT_TG3);
+    let cos4 = _mm_set1_epi16(IDCT_COS4);
+    let one = _mm_set1_epi16(1);
+
+    // Odd part
+    let mut x0 = _mm_adds_epi16(_mm_mulhi_epi16(r5, tg3), r5);
+    let x1 = _mm_adds_epi16(_mm_mulhi_epi16(r3, tg3), r3);
+    x0 = _mm_adds_epi16(x0, r3);
+    let x2 = _mm_subs_epi16(r5, x1);
+    let x5 = _mm_subs_epi16(_mm_mulhi_epi16(r1, tg1), r7);
+    let x4 = _mm_adds_epi16(_mm_mulhi_epi16(r7, tg1), r1);
+
+    let temp7 = _mm_adds_epi16(_mm_adds_epi16(x0, x4), one);
+    let t4 = _mm_subs_epi16(x4, x0);
+    let t5 = _mm_adds_epi16(_mm_subs_epi16(x5, x2), one);
+    let temp3 = _mm_adds_epi16(x5, x2);
+
+    let s = _mm_adds_epi16(t4, t5);
+    let d = _mm_subs_epi16(t4, t5);
+    let m4 = _mm_or_si128(_mm_adds_epi16(s, _mm_mulhi_epi16(cos4, s)), one);
+    let m0 = _mm_or_si128(_mm_adds_epi16(_mm_mulhi_epi16(cos4, d), d), one);
+
+    // Even part
+    let e7 = _mm_adds_epi16(_mm_mulhi_epi16(r6, tg2), r2);
+    let e3 = _mm_subs_epi16(_mm_mulhi_epi16(r2, tg2), r6);
+    let sum04 = _mm_adds_epi16(r4, r0);
+    let dif04 = _mm_subs_epi16(r0, r4);
+
+    let rnd_col = _mm_set1_epi16(IRND_INV_COL as i16);
+    let rnd_corr = _mm_set1_epi16(IRND_INV_CORR as i16);
+    let b0 = _mm_adds_epi16(_mm_adds_epi16(sum04, e7), rnd_col);
+    let b3 = _mm_adds_epi16(_mm_subs_epi16(sum04, e7), rnd_corr);
+    let b1 = _mm_adds_epi16(_mm_adds_epi16(dif04, e3), rnd_col);
+    let b2 = _mm_adds_epi16(_mm_subs_epi16(dif04, e3), rnd_corr);
+
+    let add = _mm_set1_epi16(add_val);
+    let fin = |v: __m128i| _mm_adds_epi16(_mm_srai_epi16(v, SHIFT_INV_COL), add);
+    [
+        fin(_mm_adds_epi16(temp7, b0)),
+        fin(_mm_adds_epi16(b1, m4)),
+        fin(_mm_adds_epi16(b2, m0)),
+        fin(_mm_adds_epi16(temp3, b3)),
+        fin(_mm_subs_epi16(b3, temp3)),
+        fin(_mm_subs_epi16(b2, m0)),
+        fin(_mm_subs_epi16(b1, m4)),
+        fin(_mm_subs_epi16(b0, temp7)),
+    ]
 }
 
 #[cfg(all(test, target_arch = "x86_64"))]
 mod tests {
-    use super::fdct_quant_zig_sse;
-    use crate::codec::dct::fdct_quant_zig;
+    use super::{ac_nonzero_mask_sse, fdct_quant_zig_sse, idct_row_sse, zig_invquant_idct_sse};
+    use crate::codec::dct::{fdct_quant_zig, idct_row, zig_invquant_idct};
+    use crate::tables::IDCT_ROW_TABLES;
 
     #[test]
     fn fdct_quant_zig_matches_scalar_oracle() {
@@ -549,5 +749,159 @@ mod tests {
             }
             assert_eq!(actual, expected, "add_val {add_val}");
         }
+    }
+
+    fn ac_nonzero_mask_scalar(coeffs: &[i16; 64]) -> u64 {
+        let mut mask = 0u64;
+        for (i, coeff) in coeffs.iter().enumerate().skip(1) {
+            if *coeff != 0 {
+                mask |= 1u64 << i;
+            }
+        }
+        mask
+    }
+
+    #[test]
+    fn ac_nonzero_mask_sse_matches_scalar() {
+        if !is_x86_feature_detected!("sse4.2") {
+            return;
+        }
+        let mut coeffs = [0i16; 64];
+        for (i, c) in coeffs.iter_mut().enumerate() {
+            *c = if (i * 17 + 3) % 11 == 0 {
+                0
+            } else {
+                ((i as i16) - 32) * 3
+            };
+        }
+        let expected = ac_nonzero_mask_scalar(&coeffs);
+        let actual = unsafe { ac_nonzero_mask_sse(&coeffs) };
+        assert_eq!(actual, expected);
+
+        coeffs.fill(0);
+        coeffs[0] = 42;
+        assert_eq!(
+            unsafe { ac_nonzero_mask_sse(&coeffs) },
+            ac_nonzero_mask_scalar(&coeffs)
+        );
+
+        coeffs.fill(1);
+        assert_eq!(
+            unsafe { ac_nonzero_mask_sse(&coeffs) },
+            ac_nonzero_mask_scalar(&coeffs)
+        );
+
+        coeffs.fill(0);
+        coeffs[63] = -7;
+        assert_eq!(
+            unsafe { ac_nonzero_mask_sse(&coeffs) },
+            ac_nonzero_mask_scalar(&coeffs)
+        );
+    }
+
+    #[test]
+    fn idct_row_sse_matches_scalar() {
+        if !is_x86_feature_detected!("sse4.1") {
+            return;
+        }
+        for (ti, tab) in IDCT_ROW_TABLES.iter().enumerate() {
+            for seed in 0..32i16 {
+                let mut x = [0i16; 8];
+                for (i, slot) in x.iter_mut().enumerate() {
+                    *slot = ((i as i16 + seed) * 17) - 40;
+                }
+                let expected = idct_row(x, tab);
+                let actual = unsafe { idct_row_sse(x, tab) };
+                assert_eq!(actual, expected, "table {ti} seed {seed}");
+            }
+        }
+    }
+
+    #[test]
+    fn zig_invquant_idct_sse_matches_scalar() {
+        if !is_x86_feature_detected!("sse4.1") || !is_x86_feature_detected!("ssse3") {
+            return;
+        }
+        for add_val in [0i16, 128, -128] {
+            for seed in 0..16usize {
+                let mut coeffs = [0i16; 64];
+                for (i, c) in coeffs.iter_mut().enumerate() {
+                    *c = (((i + seed) as i16) % 11) - 5;
+                }
+                let mut matrix = [0u16; 64];
+                for (i, m) in matrix.iter_mut().enumerate() {
+                    *m = ((i as u16 + seed as u16) % 13) + 1;
+                }
+
+                let mut coeffs_s = coeffs;
+                let mut dst_s = [0u8; 8 * 16];
+                zig_invquant_idct(&mut coeffs_s, &matrix, &mut dst_s, 16, add_val);
+
+                let mut coeffs_v = coeffs;
+                let mut dst_v = [0u8; 8 * 16];
+                unsafe {
+                    zig_invquant_idct_sse(&mut coeffs_v, &matrix, dst_v.as_mut_ptr(), 16, add_val);
+                }
+                assert_eq!(dst_v, dst_s, "add_val {add_val} seed {seed}");
+            }
+        }
+    }
+
+    #[test]
+    fn idct_sse_faster_than_scalar_in_release() {
+        if cfg!(debug_assertions)
+            || !is_x86_feature_detected!("sse4.1")
+            || !is_x86_feature_detected!("ssse3")
+        {
+            return;
+        }
+        use std::time::Instant;
+
+        let mut coeffs = [0i16; 64];
+        for (i, c) in coeffs.iter_mut().enumerate() {
+            *c = ((i as i16) % 11) - 5;
+        }
+        let mut matrix = [0u16; 64];
+        for (i, m) in matrix.iter_mut().enumerate() {
+            *m = ((i as u16) % 13) + 1;
+        }
+        let mut dst = [0u8; 8 * 16];
+        let warmup = 50;
+        let iters = 2000;
+
+        for _ in 0..warmup {
+            let mut c = coeffs;
+            zig_invquant_idct(&mut c, &matrix, &mut dst, 16, 128);
+            let mut c = coeffs;
+            unsafe {
+                zig_invquant_idct_sse(&mut c, &matrix, dst.as_mut_ptr(), 16, 128);
+            }
+        }
+
+        let t0 = Instant::now();
+        for _ in 0..iters {
+            let mut c = coeffs;
+            zig_invquant_idct(&mut c, &matrix, &mut dst, 16, 128);
+        }
+        let scalar = t0.elapsed();
+
+        let t0 = Instant::now();
+        for _ in 0..iters {
+            let mut c = coeffs;
+            unsafe {
+                zig_invquant_idct_sse(&mut c, &matrix, dst.as_mut_ptr(), 16, 128);
+            }
+        }
+        let sse = t0.elapsed();
+        eprintln!(
+            "idct 8x8 scalar={:.3}us sse={:.3}us ({:.2}x)",
+            scalar.as_secs_f64() * 1e6 / iters as f64,
+            sse.as_secs_f64() * 1e6 / iters as f64,
+            scalar.as_secs_f64() / sse.as_secs_f64().max(1e-12)
+        );
+        assert!(
+            sse * 5 < scalar * 4,
+            "SSE IDCT should be faster than scalar (scalar={scalar:?} sse={sse:?})"
+        );
     }
 }

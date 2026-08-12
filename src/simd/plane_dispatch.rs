@@ -21,7 +21,9 @@ pub fn encode_plane(
 ) {
     match path {
         SimdPath::Avx2 => avx2::encode_plane(plane, dc, ac, encode_matrix, dc_shift, temp_block),
-        SimdPath::Sse128 => sse128::encode_plane(plane, dc, ac, encode_matrix, dc_shift, temp_block),
+        SimdPath::Sse128 => {
+            sse128::encode_plane(plane, dc, ac, encode_matrix, dc_shift, temp_block)
+        }
         SimdPath::Neon => neon::encode_plane(plane, dc, ac, encode_matrix, dc_shift, temp_block),
         SimdPath::Scalar => {
             scalar::encode_plane_scalar(plane, dc, ac, encode_matrix, dc_shift, temp_block)
@@ -42,7 +44,9 @@ pub fn decode_plane(
 ) {
     match path {
         SimdPath::Avx2 => avx2::decode_plane(plane, dc, ac, decode_matrix, dc_shift, temp_block),
-        SimdPath::Sse128 => sse128::decode_plane(plane, dc, ac, decode_matrix, dc_shift, temp_block),
+        SimdPath::Sse128 => {
+            sse128::decode_plane(plane, dc, ac, decode_matrix, dc_shift, temp_block)
+        }
         SimdPath::Neon => neon::decode_plane(plane, dc, ac, decode_matrix, dc_shift, temp_block),
         SimdPath::Scalar => {
             scalar::decode_plane_scalar(plane, dc, ac, decode_matrix, dc_shift, temp_block)

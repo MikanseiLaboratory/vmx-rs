@@ -42,10 +42,7 @@ fn simd_path_and_capabilities_are_reported() {
 
     // Path string is one of the documented diagnostics.
     assert!(
-        matches!(
-            path.as_str(),
-            "scalar" | "sse128" | "avx2" | "neon"
-        ),
+        matches!(path.as_str(), "scalar" | "sse128" | "avx2" | "neon"),
         "unexpected path {path}"
     );
     assert_eq!(path.to_string(), path.as_str());

@@ -8,10 +8,10 @@
 
 use crate::bitstream::SliceData;
 use crate::codec::plane::PlaneView;
-#[cfg(not(target_arch = "aarch64"))]
-use crate::codec::plane::{decode_plane_scalar, encode_plane_scalar};
 #[cfg(target_arch = "aarch64")]
 use crate::codec::plane::encode_plane_scalar;
+#[cfg(not(target_arch = "aarch64"))]
+use crate::codec::plane::{decode_plane_scalar, encode_plane_scalar};
 
 #[cfg(target_arch = "aarch64")]
 use crate::bitstream::get_2mag_sign;
@@ -84,12 +84,15 @@ unsafe fn shuffle_epi32_neon(v: int16x8_t, imm: u8) -> int16x8_t {
             vgetq_lane_s32(s32, 2),
             vgetq_lane_s32(s32, 3),
         ];
-        vreinterpretq_s16_s32(vld1q_s32([
-            lanes[(imm & 3) as usize],
-            lanes[((imm >> 2) & 3) as usize],
-            lanes[((imm >> 4) & 3) as usize],
-            lanes[((imm >> 6) & 3) as usize],
-        ].as_ptr()))
+        vreinterpretq_s16_s32(vld1q_s32(
+            [
+                lanes[(imm & 3) as usize],
+                lanes[((imm >> 2) & 3) as usize],
+                lanes[((imm >> 4) & 3) as usize],
+                lanes[((imm >> 6) & 3) as usize],
+            ]
+            .as_ptr(),
+        ))
     }
 }
 
@@ -98,12 +101,15 @@ unsafe fn shuffle_epi32_neon(v: int16x8_t, imm: u8) -> int16x8_t {
 unsafe fn fdct_row_neon(input: int16x8_t, ftab: &[i16; 32]) -> int16x8_t {
     unsafe {
         let high = vget_high_s16(input);
-        let rev_high = vld1_s16([
-            vget_lane_s16(high, 3),
-            vget_lane_s16(high, 2),
-            vget_lane_s16(high, 1),
-            vget_lane_s16(high, 0),
-        ].as_ptr());
+        let rev_high = vld1_s16(
+            [
+                vget_lane_s16(high, 3),
+                vget_lane_s16(high, 2),
+                vget_lane_s16(high, 1),
+                vget_lane_s16(high, 0),
+            ]
+            .as_ptr(),
+        );
         let mut reversed = vcombine_s16(vget_low_s16(input), rev_high);
 
         let input = shuffle_epi32_neon(input, 0x44);
@@ -239,14 +245,8 @@ pub unsafe fn fdct_quant_zig_neon(
         {
             let mut q = vabsq_s16(*row);
             q = vaddq_s16(q, vreinterpretq_s16_u16(vld1q_u16(matrix.add(coeff))));
-            q = mulhi_epu16_neon(
-                q,
-                vreinterpretq_s16_u16(vld1q_u16(matrix.add(64 + coeff))),
-            );
-            q = mulhi_epu16_neon(
-                q,
-                vreinterpretq_s16_u16(vld1q_u16(matrix.add(128 + coeff))),
-            );
+            q = mulhi_epu16_neon(q, vreinterpretq_s16_u16(vld1q_u16(matrix.add(64 + coeff))));
+            q = mulhi_epu16_neon(q, vreinterpretq_s16_u16(vld1q_u16(matrix.add(128 + coeff))));
             *row = sign_epi16_neon(*row, q);
         }
 
@@ -272,9 +272,9 @@ pub fn encode_plane(
     #[cfg(target_arch = "aarch64")]
     {
         // SAFETY: NEON/ASIMD is baseline on Rust aarch64 targets.
-        return unsafe {
+        unsafe {
             encode_plane_neon(plane, dc, ac, encode_matrix, dc_shift, temp_block);
-        };
+        }
     }
     #[cfg(not(target_arch = "aarch64"))]
     encode_plane_scalar(plane, dc, ac, encode_matrix, dc_shift, temp_block);
@@ -408,9 +408,9 @@ pub fn decode_plane(
     #[cfg(target_arch = "aarch64")]
     {
         // SAFETY: NEON/ASIMD is baseline on Rust aarch64 targets.
-        return unsafe {
+        unsafe {
             decode_plane_neon(plane, dc, ac, decode_matrix, dc_shift, temp_block);
-        };
+        }
     }
     #[cfg(not(target_arch = "aarch64"))]
     decode_plane_scalar(plane, dc, ac, decode_matrix, dc_shift, temp_block);
@@ -549,13 +549,7 @@ pub unsafe fn zig_invquant_idct_neon(
         let mut out_rows = [[0i16; 8]; 8];
         for x in 0..8 {
             let col = [
-                rows[0][x],
-                rows[1][x],
-                rows[2][x],
-                rows[3][x],
-                rows[4][x],
-                rows[5][x],
-                rows[6][x],
+                rows[0][x], rows[1][x], rows[2][x], rows[3][x], rows[4][x], rows[5][x], rows[6][x],
                 rows[7][x],
             ];
             let out = idct_column(col, 0);
@@ -646,13 +640,7 @@ mod tests {
         let mut coeffs_n = coeffs;
         let mut dst_n = [0u8; 8 * 16];
         unsafe {
-            zig_invquant_idct_neon(
-                &mut coeffs_n,
-                &matrix,
-                dst_n.as_mut_ptr(),
-                16,
-                128,
-            );
+            zig_invquant_idct_neon(&mut coeffs_n, &matrix, dst_n.as_mut_ptr(), 16, 128);
         }
         assert_eq!(dst_n, dst_s);
     }

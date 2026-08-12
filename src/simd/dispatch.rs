@@ -99,7 +99,7 @@ impl SimdCapabilities {
             if caps.sse128() {
                 return SimdPath::Sse128;
             }
-            return SimdPath::Scalar;
+            SimdPath::Scalar
         }
         #[cfg(target_arch = "aarch64")]
         {
@@ -107,7 +107,7 @@ impl SimdCapabilities {
             if caps.neon {
                 return SimdPath::Neon;
             }
-            return SimdPath::Scalar;
+            SimdPath::Scalar
         }
         #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
         {
@@ -124,9 +124,10 @@ impl SimdCapabilities {
 }
 
 /// Actually selected SIMD / scalar execution path for a [`crate::Codec`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum SimdPath {
     /// Pure Rust reference kernels.
+    #[default]
     Scalar,
     /// SSE4.2 / SSSE3 128-bit path (x86_64).
     Sse128,
@@ -151,12 +152,6 @@ impl SimdPath {
 impl fmt::Display for SimdPath {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(self.as_str())
-    }
-}
-
-impl Default for SimdPath {
-    fn default() -> Self {
-        Self::Scalar
     }
 }
 
@@ -232,9 +227,6 @@ mod tests {
             neon: true,
             ..Default::default()
         };
-        assert_eq!(
-            SimdCapabilities::select_path_with(caps, 7),
-            SimdPath::Neon
-        );
+        assert_eq!(SimdCapabilities::select_path_with(caps, 7), SimdPath::Neon);
     }
 }

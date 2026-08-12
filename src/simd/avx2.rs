@@ -52,7 +52,9 @@ pub fn decode_plane(
     #[cfg(target_arch = "x86_64")]
     {
         if is_x86_feature_detected!("avx2") && is_x86_feature_detected!("bmi2") {
-            return unsafe { decode_plane_avx2(plane, dc, ac, decode_matrix, dc_shift, temp_block) };
+            return unsafe {
+                decode_plane_avx2(plane, dc, ac, decode_matrix, dc_shift, temp_block)
+            };
         }
     }
     decode_plane_scalar(plane, dc, ac, decode_matrix, dc_shift, temp_block);
@@ -198,8 +200,8 @@ unsafe fn ac_nonzero_mask_avx2(coeffs: &[i16; 64]) -> u64 {
         }
 
         // Indices 49..63 (tail — avoid loading past the array end).
-        for i in 49..64 {
-            if coeffs[i] != 0 {
+        for (i, &coeff) in coeffs.iter().enumerate().take(64).skip(49) {
+            if coeff != 0 {
                 mask |= 1u64 << i;
             }
         }
@@ -321,12 +323,7 @@ unsafe fn decode_plane_avx2(
                             add_val,
                         );
                     } else {
-                        broadcast_dc(
-                            temp_block[0],
-                            &mut plane.data[dst_off..],
-                            stride,
-                            add_val,
-                        );
+                        broadcast_dc(temp_block[0], &mut plane.data[dst_off..], stride, add_val);
                     }
 
                     if valid1 {
@@ -371,12 +368,7 @@ unsafe fn decode_plane_avx2(
                             add_val,
                         );
                     } else {
-                        broadcast_dc(
-                            temp_block[0],
-                            &mut plane.data[dst_off..],
-                            stride,
-                            add_val,
-                        );
+                        broadcast_dc(temp_block[0], &mut plane.data[dst_off..], stride, add_val);
                     }
                     x += 8;
                 }
@@ -430,8 +422,7 @@ unsafe fn decode_entropy_block_avx2(
                 let mut bc = ac.get_zeros_b();
                 bc += 2;
                 let val = ac.get_bits_b(bc as u32);
-                temp_block[*terms_to_decode as usize] =
-                    get_int_from_2mag_sign(val.wrapping_sub(1));
+                temp_block[*terms_to_decode as usize] = get_int_from_2mag_sign(val.wrapping_sub(1));
                 *terms_to_decode += 1;
             }
         }
@@ -477,7 +468,11 @@ mod tests {
 
         let mut coeffs = [0i16; 64];
         for (i, c) in coeffs.iter_mut().enumerate() {
-            *c = if (i * 17 + 3) % 11 == 0 { 0 } else { ((i as i16) - 32) * 3 };
+            *c = if (i * 17 + 3) % 11 == 0 {
+                0
+            } else {
+                ((i as i16) - 32) * 3
+            };
         }
 
         let expected = ac_nonzero_mask_scalar(&coeffs);

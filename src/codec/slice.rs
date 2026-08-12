@@ -2,7 +2,8 @@
 
 use crate::bitstream::SliceData;
 use crate::codec::plane::PlaneView;
-use crate::simd::sse128::{decode_plane, encode_plane};
+use crate::simd::dispatch::SimdPath;
+use crate::simd::{decode_plane, encode_plane};
 use crate::thread_pool::ThreadPool;
 use crate::types::SLICE_HEIGHT;
 
@@ -47,6 +48,7 @@ pub struct PlaneBuffers {
 }
 
 fn encode_slice_range(
+    path: SimdPath,
     planes: &PlaneBuffers,
     slices: &mut [SliceSet],
     encode_matrix: &[u16],
@@ -66,6 +68,7 @@ fn encode_slice_range(
                 )
             };
             encode_plane(
+                path,
                 &PlaneView {
                     index: pi,
                     data,
@@ -83,6 +86,7 @@ fn encode_slice_range(
 }
 
 pub fn encode_slices(
+    path: SimdPath,
     planes: &PlaneBuffers,
     slices: &mut [SliceSet],
     encode_matrix: &[u16],
@@ -94,10 +98,10 @@ pub fn encode_slices(
     match pool {
         Some(pool) if pool.thread_count() > 1 && slices.len() > 1 => {
             pool.parallel_chunks_mut(slices, |chunk| {
-                encode_slice_range(planes, chunk, encode_matrix, dc_shift, plane_count);
+                encode_slice_range(path, planes, chunk, encode_matrix, dc_shift, plane_count);
             });
         }
-        _ => encode_slice_range(planes, slices, encode_matrix, dc_shift, plane_count),
+        _ => encode_slice_range(path, planes, slices, encode_matrix, dc_shift, plane_count),
     }
 }
 
@@ -123,6 +127,7 @@ fn prepare_slice_bitstream(slice: &mut SliceSet) {
 }
 
 fn decode_slice_range(
+    path: SimdPath,
     plane_ptrs: [usize; 3],
     plane_lens: [usize; 3],
     strides: [usize; 3],
@@ -144,6 +149,7 @@ fn decode_slice_range(
                 offset: slice.offset[pi],
             };
             decode_plane(
+                path,
                 &mut view,
                 &mut slice.dc,
                 &mut slice.ac,
@@ -156,6 +162,7 @@ fn decode_slice_range(
 }
 
 pub fn decode_slices(
+    path: SimdPath,
     planes: &mut PlaneBuffers,
     slices: &mut [SliceSet],
     decode_matrix: &[u16],
@@ -178,6 +185,7 @@ pub fn decode_slices(
         Some(pool) if pool.thread_count() > 1 && slices.len() > 1 => {
             pool.parallel_chunks_mut(slices, |chunk| {
                 decode_slice_range(
+                    path,
                     plane_ptrs,
                     plane_lens,
                     strides,
@@ -188,6 +196,7 @@ pub fn decode_slices(
             });
         }
         _ => decode_slice_range(
+            path,
             plane_ptrs,
             plane_lens,
             strides,
@@ -200,6 +209,7 @@ pub fn decode_slices(
 
 /// Decode each slice then immediately pack that band to BGRA (cache-friendly).
 pub fn decode_slices_fused_bgra(
+    path: SimdPath,
     planes: &mut PlaneBuffers,
     slices: &mut [SliceSet],
     decode_matrix: &[u16],
@@ -240,6 +250,7 @@ pub fn decode_slices_fused_bgra(
                     offset: slice.offset[pi],
                 };
                 decode_plane(
+                    path,
                     &mut view,
                     &mut slice.dc,
                     &mut slice.ac,

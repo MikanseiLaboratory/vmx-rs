@@ -29,14 +29,14 @@ Pure Rust [VMX1](https://github.com/openmediatransport/libvmx) video codec.
 
 | Kernel | libvmx | vmx-rs |
 |--------|--------|--------|
-| FDCT + quant (8-bit) | SSE4.2 / AVX2+BMI2 | **SSE4.2 live**; AVX2 stub → scalar |
+| FDCT + quant (8-bit) | SSE4.2 / AVX2+BMI2 | **SSE4.2 live**; **AVX2+BMI2** dual-block path (FDCT via SSE kernel ×2 + AVX2 mask) |
 | FDCT + quant (10/16-bit) | SSE / AVX2 | Scalar |
-| IDCT + dequant | SSE / AVX2 | Scalar |
+| IDCT + dequant (8-bit) | SSE / AVX2 | **SSE4.1** dequant/pack; **AVX2** dual-block decode; **NEON** dequant/pack + scalar IDCT on aarch64 |
 | UYVY → planar | SSE (SSSE3) | **SSSE3 live** |
 | planar → UYVY | SSE | **SSE2 live** |
 | Other color formats | SSE | Scalar |
-| Slice parallelism | `ThreadTasks` | rayon (bitrate `Threads`) |
-| ARM64 | sse2neon | NEON stub → scalar |
+| Slice parallelism | `ThreadTasks` | rayon |
+| ARM64 | sse2neon | **Native NEON** FDCT+quant+zigzag encode; hybrid NEON dequant/pack decode |
 
 ### Instruction-family checklist
 
@@ -45,8 +45,21 @@ Pure Rust [VMX1](https://github.com/openmediatransport/libvmx) video codec.
 | **SSE2** | planar → UYVY | Live | [x] |
 | **SSSE3** | UYVY → planar | Live | [x] |
 | **SSE4.2** | FDCT + quant encode | Live | [x] |
-| **AVX2 + BMI2** | DCT (libvmx path) | Stub → scalar | [ ] |
-| **NEON** | ARM64 kernels | Stub → scalar | [ ] |
+| **AVX2 + BMI2** | Dual-block plane encode/decode | Live (x86_64, UV width % 16 == 0) | [x] |
+| **NEON** | ARM64 plane encode/decode | Live (aarch64) | [x] cross-compile |
+
+### Runtime path reporting
+
+```rust
+let codec = Codec::new(Config::new(1920, 1080))?;
+println!("path={}", codec.simd_path()); // "avx2" | "sse128" | "neon" | "scalar"
+let caps = codec.simd_capabilities();   // host features (not rewritten by geometry)
+```
+
+Selection priority (matches libvmx gates):
+
+- **x86_64:** AVX2 if `avx2 && bmi2 && (width/2) % 16 == 0`, else SSE4.2+SSSE3, else Scalar
+- **aarch64:** Neon, else Scalar
 
 ## Usage
 

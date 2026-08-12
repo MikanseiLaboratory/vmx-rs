@@ -159,6 +159,7 @@ impl fmt::Display for SimdPath {
 mod tests {
     use super::*;
 
+    #[cfg(target_arch = "x86_64")]
     #[test]
     fn avx2_requires_bmi2_and_uv_multiple_of_16() {
         let caps = SimdCapabilities {
@@ -187,6 +188,7 @@ mod tests {
         );
     }
 
+    #[cfg(target_arch = "x86_64")]
     #[test]
     fn sse128_requires_both_sse42_and_ssse3() {
         let only_sse42 = SimdCapabilities {

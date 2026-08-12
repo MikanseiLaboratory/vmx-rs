@@ -61,15 +61,17 @@ unsafe fn mulhi_epu16_neon(a: int16x8_t, b: int16x8_t) -> int16x8_t {
     }
 }
 
+/// SSE `_mm_sign_epi16(val, signs)`: negate `val` where `signs < 0`, zero where
+/// `signs == 0`, otherwise keep `val`.
 #[cfg(target_arch = "aarch64")]
 #[inline]
-unsafe fn sign_epi16_neon(a: int16x8_t, b: int16x8_t) -> int16x8_t {
+unsafe fn sign_epi16_neon(val: int16x8_t, signs: int16x8_t) -> int16x8_t {
     unsafe {
-        let zero = vceqzq_s16(a);
-        let nonzero = vorrq_s16(a, vdupq_n_s16(1));
-        let sign = vshrq_n_s16(nonzero, 15);
-        let masked = vmulq_s16(b, sign);
-        vbslq_s16(zero, vdupq_n_s16(0), masked)
+        let neg = vcltzq_s16(signs);
+        let zero = vceqzq_s16(signs);
+        let flipped = vnegq_s16(val);
+        let signed = vbslq_s16(neg, flipped, val);
+        vbslq_s16(zero, vdupq_n_s16(0), signed)
     }
 }
 
@@ -247,7 +249,7 @@ pub unsafe fn fdct_quant_zig_neon(
             q = vaddq_s16(q, vreinterpretq_s16_u16(vld1q_u16(matrix.add(coeff))));
             q = mulhi_epu16_neon(q, vreinterpretq_s16_u16(vld1q_u16(matrix.add(64 + coeff))));
             q = mulhi_epu16_neon(q, vreinterpretq_s16_u16(vld1q_u16(matrix.add(128 + coeff))));
-            *row = sign_epi16_neon(*row, q);
+            *row = sign_epi16_neon(q, *row);
         }
 
         let mut spatial = [0i16; 64];

@@ -210,6 +210,7 @@ pub fn decode_slices(
 /// Decode each slice then immediately pack that band to BGRA (cache-friendly).
 pub fn decode_slices_fused_bgra(
     path: SimdPath,
+    color_path: crate::color::simd::ColorSimdPath,
     planes: &mut PlaneBuffers,
     slices: &mut [SliceSet],
     decode_matrix: &[u16],
@@ -269,7 +270,8 @@ pub fn decode_slices_fused_bgra(
                 unsafe { std::slice::from_raw_parts(plane_ptrs[1] as *const u8, plane_lens[1]) };
             let v =
                 unsafe { std::slice::from_raw_parts(plane_ptrs[2] as *const u8, plane_lens[2]) };
-            crate::color::convert::yuv422_band_to_bgra(
+            crate::color::convert::yuv422_band_to_bgra_with_path(
+                color_path,
                 y,
                 strides[0],
                 u,

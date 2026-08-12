@@ -1,7 +1,7 @@
-//! Cross-path plane encode bitstream identity tests.
+//! Cross-path plane encode/decode bitstream and pixel identity tests.
 
 use crate::bitstream::SliceData;
-use crate::codec::plane::{PlaneView, encode_plane_scalar};
+use crate::codec::plane::{PlaneView, decode_plane_scalar, encode_plane_scalar};
 use crate::simd::dispatch::SimdPath;
 use crate::types::SLICE_HEIGHT;
 
@@ -34,6 +34,55 @@ fn encode_with(
     (dc.stream.clone(), ac.stream.clone())
 }
 
+fn decode_with(
+    path: SimdPath,
+    width: usize,
+    dc_stream: &[u8],
+    ac_stream: &[u8],
+    decode_matrix: &[u16],
+) -> Vec<u8> {
+    let stride = width;
+    let height = SLICE_HEIGHT as usize;
+    let mut data = vec![0u8; stride * height];
+    let mut dc = SliceData::new(dc_stream.len().max(64));
+    let mut ac = SliceData::new(ac_stream.len().max(64));
+    dc.stream.clear();
+    dc.stream.extend_from_slice(dc_stream);
+    ac.stream.clear();
+    ac.stream.extend_from_slice(ac_stream);
+    // Mirror prepare_slice_bitstream: load first 8 bytes as BE bitstream word.
+    dc.pos = 0;
+    ac.pos = 0;
+    dc.bits_left = crate::types::BITS_SIZE;
+    ac.bits_left = crate::types::BITS_SIZE;
+    let mut buf = [0u8; 8];
+    let n = 8.min(dc.stream.len());
+    buf[..n].copy_from_slice(&dc.stream[..n]);
+    dc.temp_read = u64::from_be_bytes(buf);
+    let mut buf = [0u8; 8];
+    let n = 8.min(ac.stream.len());
+    buf[..n].copy_from_slice(&ac.stream[..n]);
+    ac.temp_read = u64::from_be_bytes(buf);
+
+    let mut temp = [0i16; 64];
+    let mut plane = PlaneView {
+        index: 0,
+        data: &mut data,
+        stride,
+        offset: 0,
+    };
+    crate::simd::decode_plane(
+        path,
+        &mut plane,
+        &mut dc,
+        &mut ac,
+        decode_matrix,
+        0,
+        &mut temp,
+    );
+    data
+}
+
 fn identity_matrix() -> Vec<u16> {
     // Minimal reciprocal-style matrix: ones for offset, all-ones for mulhi stages
     // so FDCT output is quantized consistently across paths.
@@ -44,6 +93,10 @@ fn identity_matrix() -> Vec<u16> {
         m[128 + i] = u16::MAX;
     }
     m
+}
+
+fn decode_matrix_ones() -> Vec<u16> {
+    vec![1u16; 64]
 }
 
 #[test]
@@ -103,6 +156,51 @@ fn neon_encode_matches_scalar() {
     assert_eq!(neon.1, scalar.1, "AC bitstream mismatch Neon vs scalar");
 }
 
+#[cfg(target_arch = "x86_64")]
+#[test]
+fn sse128_decode_pixels_match_scalar_when_available() {
+    if !(is_x86_feature_detected!("sse4.2") && is_x86_feature_detected!("sse4.1")) {
+        return;
+    }
+    let (mut data, stride) = test_plane(64);
+    let enc_matrix = identity_matrix();
+    let (dc, ac) = encode_with(SimdPath::Scalar, &mut data, stride, &enc_matrix);
+    let dec_matrix = decode_matrix_ones();
+    let scalar = decode_with(SimdPath::Scalar, 64, &dc, &ac, &dec_matrix);
+    let sse = decode_with(SimdPath::Sse128, 64, &dc, &ac, &dec_matrix);
+    assert_eq!(sse, scalar, "SSE decode pixels mismatch vs scalar");
+}
+
+#[cfg(target_arch = "x86_64")]
+#[test]
+fn avx2_decode_pixels_match_scalar_when_available() {
+    if !(is_x86_feature_detected!("avx2")
+        && is_x86_feature_detected!("bmi2")
+        && is_x86_feature_detected!("sse4.1"))
+    {
+        return;
+    }
+    let (mut data, stride) = test_plane(64);
+    let enc_matrix = identity_matrix();
+    let (dc, ac) = encode_with(SimdPath::Scalar, &mut data, stride, &enc_matrix);
+    let dec_matrix = decode_matrix_ones();
+    let scalar = decode_with(SimdPath::Scalar, 64, &dc, &ac, &dec_matrix);
+    let avx = decode_with(SimdPath::Avx2, 64, &dc, &ac, &dec_matrix);
+    assert_eq!(avx, scalar, "AVX2 decode pixels mismatch vs scalar");
+}
+
+#[cfg(target_arch = "aarch64")]
+#[test]
+fn neon_decode_pixels_match_scalar() {
+    let (mut data, stride) = test_plane(64);
+    let enc_matrix = identity_matrix();
+    let (dc, ac) = encode_with(SimdPath::Scalar, &mut data, stride, &enc_matrix);
+    let dec_matrix = decode_matrix_ones();
+    let scalar = decode_with(SimdPath::Scalar, 64, &dc, &ac, &dec_matrix);
+    let neon = decode_with(SimdPath::Neon, 64, &dc, &ac, &dec_matrix);
+    assert_eq!(neon, scalar, "Neon decode pixels mismatch vs scalar");
+}
+
 #[test]
 fn encode_plane_scalar_direct_smoke() {
     let (mut data, stride) = test_plane(32);
@@ -123,5 +221,6 @@ fn encode_plane_scalar_direct_smoke() {
         0,
         &mut temp,
     );
+    let _ = decode_plane_scalar;
     assert!(!dc.stream.is_empty() || !ac.stream.is_empty() || true);
 }

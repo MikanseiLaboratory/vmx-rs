@@ -3,9 +3,11 @@
 use crate::bitrate::{adjust_bitrate, lookup_bitrate};
 use crate::codec::slice::{PlaneBuffers, SliceSet, decode_slices, encode_slices};
 use crate::color::convert::{
-    bgra_to_yuv4224, calculate_psnr, nv12_to_planar, planar_to_uyvy, planar_to_yuy2,
-    select_rgb_yuv, select_yuv_rgb, uyvy_to_planar, yuy2_to_planar, yv12_to_planar,
+    bgra_to_yuv4224_with_path, calculate_psnr, nv12_to_planar, planar_to_uyvy, planar_to_yuy2,
+    select_rgb_yuv, select_yuv_rgb, uyvy_to_planar, yuv422_band_to_bgra_with_path, yuy2_to_planar,
+    yv12_to_planar,
 };
+use crate::color::simd::ColorSimdPath;
 use crate::container::{encoded_preview_length, parse_and_load, preview_bitstream_length, save_to};
 use crate::error::{Result, VmxError};
 use crate::simd::dispatch::{SimdCapabilities, SimdPath};
@@ -52,10 +54,12 @@ pub struct Codec {
     quality: i32,
     min_quality: i32,
     dc_shift: i32,
-    /// Host CPU capabilities (not rewritten by image geometry).
+    /// Host CPU feature flags.
     capabilities: SimdCapabilities,
-    /// Execution path selected at construction (AVX2 / SSE128 / Neon / Scalar).
+    /// DCT execution path selected at construction.
     simd_path: SimdPath,
+    /// Color conversion path selected at construction.
+    color_path: ColorSimdPath,
     decode_presets: Vec<Vec<u16>>,
     encode_presets: Vec<Vec<u16>>,
     decode_matrix_idx: usize,
@@ -101,8 +105,6 @@ impl Codec {
 
         let capabilities = SimdCapabilities::detect();
         let br = lookup_bitrate(profile, height);
-        // Decode/encode share the pool; prefer enough workers for 1080p59.94
-        // rather than the historical bitrate-table default of 2 @ 1080p.
         let nthreads = std::thread::available_parallelism()
             .map(|n| n.get())
             .unwrap_or(2);
@@ -122,8 +124,8 @@ impl Codec {
         let mut uv_stride = uv_w;
         y_stride = align_up(y_stride as i32, 8) as usize;
         uv_stride = align_up(uv_stride as i32, 8) as usize;
-        // Capabilities stay honest; geometry only affects the selected path.
         let simd_path = capabilities.select_path(uv_w);
+        let color_path = ColorSimdPath::detect();
 
         let aligned_height = align_up(height, 16);
         let plane_len = y_stride * aligned_height as usize * 2;
@@ -194,6 +196,7 @@ impl Codec {
             dc_shift: br.dc_shift,
             capabilities,
             simd_path,
+            color_path,
             decode_presets,
             encode_presets,
             decode_matrix_idx: 0,
@@ -217,7 +220,7 @@ impl Codec {
         Ok(codec)
     }
 
-    /// Alias for [`Codec::new`] (public API name).
+    /// Alias for [`Codec::new`].
     pub fn create(config: Config) -> Result<Self> {
         Self::new(config)
     }
@@ -246,21 +249,22 @@ impl Codec {
         self.preview_size
     }
 
-    /// Host CPU SIMD capabilities detected at construction.
+    /// Host CPU SIMD capabilities.
     pub fn simd_capabilities(&self) -> SimdCapabilities {
         self.capabilities
     }
 
-    /// Execution path actually selected for this codec instance.
-    ///
-    /// Returns [`SimdPath::Scalar`] when no accelerated path applies. On x86_64,
-    /// AVX2 is only chosen when AVX2+BMI2 are present and UV width is a multiple
-    /// of 16; otherwise SSE128 or Scalar is used.
+    /// Selected DCT SIMD path for this instance.
     pub fn simd_path(&self) -> SimdPath {
         self.simd_path
     }
 
-    /// Alias for [`Self::simd_capabilities`] (historical name).
+    /// Selected color conversion SIMD path.
+    pub fn color_simd_path(&self) -> ColorSimdPath {
+        self.color_path
+    }
+
+    /// Alias for [`Self::simd_capabilities`].
     pub fn features(&self) -> SimdCapabilities {
         self.capabilities
     }
@@ -377,7 +381,6 @@ impl Codec {
     }
 
     fn configure_interlaced(&mut self, format: Format) {
-        // Interlaced decode is not supported — always treat as progressive pack.
         let _ = format;
         self.format = Format::Progressive;
     }
@@ -448,7 +451,7 @@ impl Codec {
         Ok(())
     }
 
-    /// DC-only decode into internal planes (one 8×8 DC broadcast per block).
+    /// DC-only decode into internal planes (sparse 1/8 preview layout).
     fn decode_planes_preview(&mut self) {
         for slice in self.slices.iter_mut() {
             slice.dc.pos = 0;
@@ -523,12 +526,22 @@ impl Codec {
         let (y, rest) = self.planes.data.split_at_mut(1);
         let (u, rest) = rest.split_at_mut(1);
         let (v, a) = rest.split_at_mut(1);
-        bgra_to_yuv4224(
-            src, stride, &mut y[0], stride_y, &mut u[0], stride_u, &mut v[0], stride_v, &mut a[0],
-            stride_a, size, table,
+        bgra_to_yuv4224_with_path(
+            self.color_path,
+            src,
+            stride,
+            &mut y[0],
+            stride_y,
+            &mut u[0],
+            stride_u,
+            &mut v[0],
+            stride_v,
+            &mut a[0],
+            stride_a,
+            size,
+            table,
         );
         self.encode_planes();
-        // Also encode alpha plane — currently encode_slices encodes all 4; OK
         Ok(())
     }
 
@@ -539,6 +552,7 @@ impl Codec {
         let idx = self.decode_matrix_idx;
         crate::codec::slice::decode_slices_fused_bgra(
             self.simd_path,
+            self.color_path,
             &mut self.planes,
             &mut self.slices,
             &self.decode_presets[idx],
@@ -620,17 +634,17 @@ impl Codec {
         Ok(())
     }
 
-    /// Alpha / UYVA is not supported in this build.
+    /// Returns [`VmxError::InvalidParameters`].
     pub fn encode_uyva(&mut self, _src: &[u8], _stride: usize) -> Result<()> {
         Err(VmxError::InvalidParameters)
     }
 
-    /// Alpha / UYVA is not supported in this build.
+    /// Returns [`VmxError::InvalidParameters`].
     pub fn decode_uyva(&mut self, _dst: &mut [u8], _stride: usize) -> Result<()> {
         Err(VmxError::InvalidParameters)
     }
 
-    /// 10-bit P216 is not supported in this build.
+    /// Returns [`VmxError::InvalidParameters`].
     pub fn encode_p216(
         &mut self,
         _src_y: &[u8],
@@ -641,7 +655,7 @@ impl Codec {
         Err(VmxError::InvalidParameters)
     }
 
-    /// 10-bit P216 is not supported in this build.
+    /// Returns [`VmxError::InvalidParameters`].
     pub fn decode_p216(
         &mut self,
         _dst_y: &mut [u8],
@@ -652,7 +666,7 @@ impl Codec {
         Err(VmxError::InvalidParameters)
     }
 
-    /// 10-bit PA16 is not supported in this build.
+    /// Returns [`VmxError::InvalidParameters`].
     pub fn encode_pa16(
         &mut self,
         _src_y: &[u8],
@@ -665,7 +679,7 @@ impl Codec {
         Err(VmxError::InvalidParameters)
     }
 
-    /// 10-bit PA16 is not supported in this build.
+    /// Returns [`VmxError::InvalidParameters`].
     pub fn decode_pa16(
         &mut self,
         _dst_y: &mut [u8],
@@ -680,78 +694,73 @@ impl Codec {
 
     /// Decode a 1/8 progressive preview as packed UYVY.
     ///
-    /// Codec dimensions must match the **full** frame; output size is
-    /// [`Self::preview_size`]. Interlaced preview is not supported.
+    /// Codec dimensions must match the full frame; output size is
+    /// [`Self::preview_size`].
     pub fn decode_preview_uyvy(&mut self, dst: &mut [u8], stride: usize) -> Result<()> {
         self.validate_preview_output(dst, stride, 2)?;
         self.decode_planes_preview();
-        let pw = self.preview_size.width as usize;
-        let ph = self.preview_size.height as usize;
-        for row in 0..ph {
-            for x in 0..pw / 2 {
-                let sx = x * 8;
-                let sy = row * 8;
-                let y0 = self.planes.data[0][sy * self.planes.stride[0] + sx * 2];
-                let y1 = self.planes.data[0][sy * self.planes.stride[0] + sx * 2 + 1];
-                let u = self.planes.data[1][sy * self.planes.stride[1] + sx];
-                let v = self.planes.data[2][sy * self.planes.stride[2] + sx];
-                let o = row * stride + x * 4;
-                dst[o] = u;
-                dst[o + 1] = y0;
-                dst[o + 2] = v;
-                dst[o + 3] = y1;
-            }
-        }
+        planar_to_uyvy(
+            &self.planes.data[0],
+            self.planes.stride[0],
+            &self.planes.data[1],
+            self.planes.stride[1],
+            &self.planes.data[2],
+            self.planes.stride[2],
+            dst,
+            stride,
+            self.preview_size,
+        );
         Ok(())
     }
 
-    /// Decode a 1/8 progressive preview as packed BGRA8 (alpha = 255).
+    /// Decode a 1/8 progressive preview as packed YUY2.
     ///
-    /// Codec dimensions must match the **full** frame; output size is
-    /// [`Self::preview_size`]. Interlaced preview is not supported.
+    /// Codec dimensions must match the full frame; output size is
+    /// [`Self::preview_size`].
+    pub fn decode_preview_yuy2(&mut self, dst: &mut [u8], stride: usize) -> Result<()> {
+        self.validate_preview_output(dst, stride, 2)?;
+        self.decode_planes_preview();
+        planar_to_yuy2(
+            &self.planes.data[0],
+            self.planes.stride[0],
+            &self.planes.data[1],
+            self.planes.stride[1],
+            &self.planes.data[2],
+            self.planes.stride[2],
+            dst,
+            stride,
+            self.preview_size,
+        );
+        Ok(())
+    }
+
+    /// Decode a 1/8 progressive preview as packed BGRA8.
+    ///
+    /// Codec dimensions must match the full frame; output size is
+    /// [`Self::preview_size`].
     pub fn decode_preview_bgra(&mut self, dst: &mut [u8], stride: usize) -> Result<()> {
         self.validate_preview_output(dst, stride, 4)?;
         self.decode_planes_preview();
         let table = select_yuv_rgb(self.color_space, self.size.height);
-        let pw = self.preview_size.width as usize;
-        let ph = self.preview_size.height as usize;
-        let y_stride = self.planes.stride[0];
-        let u_stride = self.planes.stride[1];
-        let v_stride = self.planes.stride[2];
-        let y_plane = &self.planes.data[0];
-        let u_plane = &self.planes.data[1];
-        let v_plane = &self.planes.data[2];
-        for row in 0..ph {
-            let sy = row * 8;
-            let d = &mut dst[row * stride..];
-            let mut x = 0usize;
-            let mut px = 0usize;
-            while px + 1 < pw {
-                let sx = x * 8;
-                let cb = u_plane[sy * u_stride + sx] as i32 - 128;
-                let cr = v_plane[sy * v_stride + sx] as i32 - 128;
-                for i in 0..2 {
-                    // Full-plane Y is 4:2:2 packed as Y0 Y1 per macropixel at sx*2.
-                    let yy = y_plane[sy * y_stride + sx * 2 + i] as i32;
-                    let y_term = (table[0] as i32 * (yy - 16)) >> 14;
-                    let r = y_term + ((table[1] as i32 * cr) >> 14);
-                    let g =
-                        y_term - ((table[2] as i32 * cb) >> 14) - ((table[3] as i32 * cr) >> 14);
-                    let b = y_term + ((table[4] as i32 * cb) >> 13);
-                    let o = (px + i) * 4;
-                    d[o] = b.clamp(0, 255) as u8;
-                    d[o + 1] = g.clamp(0, 255) as u8;
-                    d[o + 2] = r.clamp(0, 255) as u8;
-                    d[o + 3] = 255;
-                }
-                x += 1;
-                px += 2;
-            }
-        }
+        yuv422_band_to_bgra_with_path(
+            self.color_path,
+            &self.planes.data[0],
+            self.planes.stride[0],
+            &self.planes.data[1],
+            self.planes.stride[1],
+            &self.planes.data[2],
+            self.planes.stride[2],
+            0,
+            self.preview_size.height as usize,
+            self.preview_size.width as usize,
+            dst,
+            stride,
+            table,
+        );
         Ok(())
     }
 
-    /// Alias for [`Self::decode_preview_bgra`] (opaque alpha).
+    /// Alias for [`Self::decode_preview_bgra`].
     pub fn decode_preview_bgrx(&mut self, dst: &mut [u8], stride: usize) -> Result<()> {
         self.decode_preview_bgra(dst, stride)
     }

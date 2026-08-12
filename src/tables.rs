@@ -75,7 +75,7 @@ pub const BR_SHIFT: usize = 3;
 pub const BR_MINQ: usize = 4;
 pub const BR_THREADS: usize = 5;
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub struct ShortRgb {
     pub r: i16,
     pub g: i16,
@@ -174,10 +174,47 @@ pub const TAB_I_35: [i16; 32] = [
     -26722, -15137, 5315, 22654, 22654, -26722,
 ];
 
-/// Row-table selection per block row, mirroring the `a0..a7` dispatch in
-/// `VMX_ZIG_INVQUANTIZE_IDCT_8X8_128`.
+/// IDCT row tables per block row.
 pub const IDCT_ROW_TABLES: [&[i16; 32]; 8] = [
     &TAB_I_04, &TAB_I_17, &TAB_I_26, &TAB_I_35, &TAB_I_04, &TAB_I_35, &TAB_I_26, &TAB_I_17,
+];
+
+// AVX2 lane-duplicated tables.
+
+macro_rules! dup_lanes {
+    ($src:expr) => {{
+        const SRC: &[i16; 32] = &$src;
+        [
+            SRC[0], SRC[1], SRC[2], SRC[3], SRC[4], SRC[5], SRC[6], SRC[7], SRC[0], SRC[1], SRC[2],
+            SRC[3], SRC[4], SRC[5], SRC[6], SRC[7], SRC[8], SRC[9], SRC[10], SRC[11], SRC[12],
+            SRC[13], SRC[14], SRC[15], SRC[8], SRC[9], SRC[10], SRC[11], SRC[12], SRC[13], SRC[14],
+            SRC[15], SRC[16], SRC[17], SRC[18], SRC[19], SRC[20], SRC[21], SRC[22], SRC[23],
+            SRC[16], SRC[17], SRC[18], SRC[19], SRC[20], SRC[21], SRC[22], SRC[23], SRC[24],
+            SRC[25], SRC[26], SRC[27], SRC[28], SRC[29], SRC[30], SRC[31], SRC[24], SRC[25],
+            SRC[26], SRC[27], SRC[28], SRC[29], SRC[30], SRC[31],
+        ]
+    }};
+}
+
+pub const FTAB1_256: [i16; 64] = dup_lanes!(FTAB1_128);
+pub const FTAB2_256: [i16; 64] = dup_lanes!(FTAB2_128);
+pub const FTAB3_256: [i16; 64] = dup_lanes!(FTAB3_128);
+pub const FTAB4_256: [i16; 64] = dup_lanes!(FTAB4_128);
+
+pub const TAB_I_04_256: [i16; 64] = dup_lanes!(TAB_I_04);
+pub const TAB_I_17_256: [i16; 64] = dup_lanes!(TAB_I_17);
+pub const TAB_I_26_256: [i16; 64] = dup_lanes!(TAB_I_26);
+pub const TAB_I_35_256: [i16; 64] = dup_lanes!(TAB_I_35);
+
+pub const IDCT_ROW_TABLES_256: [&[i16; 64]; 8] = [
+    &TAB_I_04_256,
+    &TAB_I_17_256,
+    &TAB_I_26_256,
+    &TAB_I_35_256,
+    &TAB_I_04_256,
+    &TAB_I_35_256,
+    &TAB_I_26_256,
+    &TAB_I_17_256,
 ];
 
 #[inline]

@@ -8,7 +8,7 @@ use crate::color::convert::{
 };
 use crate::container::{encoded_preview_length, parse_and_load, preview_bitstream_length, save_to};
 use crate::error::{Result, VmxError};
-use crate::simd::dispatch::CpuFeatures;
+use crate::simd::dispatch::{SimdCapabilities, SimdPath};
 use crate::tables::{QUALITY, QUANT_MATRIX};
 use crate::thread_pool::ThreadPool;
 use crate::types::{
@@ -52,7 +52,10 @@ pub struct Codec {
     quality: i32,
     min_quality: i32,
     dc_shift: i32,
-    features: CpuFeatures,
+    /// Host CPU capabilities (not rewritten by image geometry).
+    capabilities: SimdCapabilities,
+    /// Execution path selected at construction (AVX2 / SSE128 / Neon / Scalar).
+    simd_path: SimdPath,
     decode_presets: Vec<Vec<u16>>,
     encode_presets: Vec<Vec<u16>>,
     decode_matrix_idx: usize,
@@ -96,7 +99,7 @@ impl Codec {
             };
         }
 
-        let mut features = CpuFeatures::detect();
+        let capabilities = SimdCapabilities::detect();
         let br = lookup_bitrate(profile, height);
         // Decode/encode share the pool; prefer enough workers for 1080p59.94
         // rather than the historical bitrate-table default of 2 @ 1080p.
@@ -119,9 +122,8 @@ impl Codec {
         let mut uv_stride = uv_w;
         y_stride = align_up(y_stride as i32, 8) as usize;
         uv_stride = align_up(uv_stride as i32, 8) as usize;
-        if !uv_w.is_multiple_of(16) {
-            features.avx2 = false;
-        }
+        // Capabilities stay honest; geometry only affects the selected path.
+        let simd_path = capabilities.select_path(uv_w);
 
         let aligned_height = align_up(height, 16);
         let plane_len = y_stride * aligned_height as usize * 2;
@@ -190,7 +192,8 @@ impl Codec {
             quality: 80,
             min_quality: br.min_quality,
             dc_shift: br.dc_shift,
-            features,
+            capabilities,
+            simd_path,
             decode_presets,
             encode_presets,
             decode_matrix_idx: 0,
@@ -210,7 +213,6 @@ impl Codec {
             image_format: ImageFormat::Uyvy,
         };
         codec.set_quality(80);
-        let _ = uv_w;
         let _ = ALIGNMENT;
         Ok(codec)
     }
@@ -244,8 +246,23 @@ impl Codec {
         self.preview_size
     }
 
-    pub fn features(&self) -> CpuFeatures {
-        self.features
+    /// Host CPU SIMD capabilities detected at construction.
+    pub fn simd_capabilities(&self) -> SimdCapabilities {
+        self.capabilities
+    }
+
+    /// Execution path actually selected for this codec instance.
+    ///
+    /// Returns [`SimdPath::Scalar`] when no accelerated path applies. On x86_64,
+    /// AVX2 is only chosen when AVX2+BMI2 are present and UV width is a multiple
+    /// of 16; otherwise SSE128 or Scalar is used.
+    pub fn simd_path(&self) -> SimdPath {
+        self.simd_path
+    }
+
+    /// Alias for [`Self::simd_capabilities`] (historical name).
+    pub fn features(&self) -> SimdCapabilities {
+        self.capabilities
     }
 
     pub fn threads(&self) -> usize {
@@ -313,6 +330,7 @@ impl Codec {
         let dc_shift = self.dc_shift;
         let idx = self.decode_matrix_idx;
         encode_slices(
+            self.simd_path,
             &self.planes,
             &mut self.slices,
             &self.encode_presets[idx],
@@ -326,6 +344,7 @@ impl Codec {
         let dc_shift = self.dc_shift;
         let idx = self.decode_matrix_idx;
         decode_slices(
+            self.simd_path,
             &mut self.planes,
             &mut self.slices,
             &self.decode_presets[idx],
@@ -519,6 +538,7 @@ impl Codec {
         let dc_shift = self.dc_shift;
         let idx = self.decode_matrix_idx;
         crate::codec::slice::decode_slices_fused_bgra(
+            self.simd_path,
             &mut self.planes,
             &mut self.slices,
             &self.decode_presets[idx],

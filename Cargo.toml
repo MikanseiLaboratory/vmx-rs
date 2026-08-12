@@ -22,6 +22,9 @@ rayon = "1.10"
 [[example]]
 name = "roundtrip"
 
+[[example]]
+name = "simd_report"
+
 [profile.release]
 lto = "thin"
 codegen-units = 1

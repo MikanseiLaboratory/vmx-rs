@@ -537,12 +537,8 @@ unsafe fn inverse_zigzag_8x8_neon(coeffs: &[i16; 64]) -> [int16x8_t; 8] {
         #[inline(always)]
         unsafe fn blend_epi16(a: int16x8_t, b: int16x8_t, imm8: u8) -> int16x8_t {
             unsafe {
-                let mut m = [0u16; 8];
-                for i in 0..8 {
-                    if imm8 & (1u8 << i) != 0 {
-                        m[i] = u16::MAX;
-                    }
-                }
+                let m: [u16; 8] =
+                    std::array::from_fn(|i| if imm8 & (1u8 << i) != 0 { u16::MAX } else { 0 });
                 vbslq_s16(vld1q_u16(m.as_ptr()), b, a)
             }
         }
@@ -740,8 +736,8 @@ unsafe fn idct_row_neon_vec(x: [i16; 8], tab: &[i16; 32]) -> int16x8_t {
             madd_epi16_neon(a57, vld1q_s16(tab.as_ptr().add(24))),
         );
 
-        let sum = vshrq_n_s32(vaddq_s32(even, odd), SHIFT_INV_ROW as i32);
-        let diff = vshrq_n_s32(vsubq_s32(even, odd), SHIFT_INV_ROW as i32);
+        let sum = vshrq_n_s32(vaddq_s32(even, odd), SHIFT_INV_ROW);
+        let diff = vshrq_n_s32(vsubq_s32(even, odd), SHIFT_INV_ROW);
         // Saturating pack i32→i16 for low/high halves.
         let lo = vcombine_s16(vqmovn_s32(sum), vqmovn_s32(sum));
         let hi = vcombine_s16(vqmovn_s32(diff), vqmovn_s32(diff));
@@ -799,7 +795,7 @@ unsafe fn idct_columns_8_neon(rows: [int16x8_t; 8], add_val: i16) -> [int16x8_t;
         let b2 = vqaddq_s16(vqsubq_s16(dif04, e3), rnd_corr);
 
         let add = vdupq_n_s16(add_val);
-        let fin = |v: int16x8_t| vqaddq_s16(vshrq_n_s16(v, SHIFT_INV_COL as i32), add);
+        let fin = |v: int16x8_t| vqaddq_s16(vshrq_n_s16(v, SHIFT_INV_COL), add);
         [
             fin(vqaddq_s16(temp7, b0)),
             fin(vqaddq_s16(b1, m4)),

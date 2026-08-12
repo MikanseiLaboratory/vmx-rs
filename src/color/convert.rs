@@ -1514,6 +1514,7 @@ mod tests {
         }
     }
 
+    #[cfg(target_arch = "x86_64")]
     fn fill_yuy2(width: i32, height: i32) -> (Vec<u8>, usize) {
         let stride = (width as usize) * 2;
         let mut src = vec![0u8; stride * height as usize];

@@ -1,10 +1,11 @@
 # Cross-ISA SIMD path benchmarks on GitHub-hosted runners.
 #
-# Compares scalar / arch (AVX2, SSE128, NEON) / optional portable (`std::simd`)
-# on the same machine. Numbers are noisy on shared VMs — compare within a job.
+# Compares scalar / arch (AVX2, SSE128, NEON, SVE when present) / optional
+# portable (`std::simd`) on the same machine. Numbers are noisy on shared VMs —
+# compare within a job.
 #
-# AVX-512: hosted runners do not reliably provide it, and vmx-rs has no AVX-512
-# kernels yet. The workflow only *reports* whether avx512f is present.
+# AVX-512: hosted runners rarely expose it; this workflow still tries the
+# `avx512` path (skipped when unsupported). Dedicated AVX-512 kernels exist.
 
 name: SIMD bench
 
@@ -46,18 +47,22 @@ jobs:
           - name: ubuntu-x64-avx2
             os: ubuntu-latest
             portable: "1"
-          # Linux ARM64 — NEON / ASIMD.
+            sve: "0"
+          # Linux ARM64 — NEON / ASIMD (± SVE on some hosts).
           - name: ubuntu-arm64-neon
             os: ubuntu-24.04-arm
             portable: "1"
+            sve: "1"
           # macOS Apple Silicon — NEON.
           - name: macos-arm64-neon
             os: macos-latest
             portable: "1"
+            sve: "0"
           # macOS Intel — AVX2 when available (paid/standard intel label).
           - name: macos-x64-avx2
             os: macos-15-intel
             portable: "1"
+            sve: "0"
 
     runs-on: ${{ matrix.os }}
     continue-on-error: ${{ matrix.os == 'macos-15-intel' || matrix.os == 'ubuntu-24.04-arm' }}
@@ -69,8 +74,8 @@ jobs:
         with:
           toolchain: "1.97"
 
-      - name: Install nightly (portable-simd)
-        if: matrix.portable == '1'
+      - name: Install nightly (portable-simd / sve)
+        if: matrix.portable == '1' || matrix.sve == '1'
         uses: dtolnay/rust-toolchain@nightly
 
       - name: Detect CPU flags
@@ -85,16 +90,19 @@ jobs:
               grep -m1 'model name' /proc/cpuinfo || true
               echo
               echo '### /proc/cpuinfo flags (filtered)'
-              FLAGS=$(grep -m1 '^flags' /proc/cpuinfo | cut -d: -f2- || true)
-              for f in sse2 ssse3 sse4_1 sse4_2 avx avx2 bmi1 bmi2 avx512f avx512dq avx512bw avx512vl; do
+              FLAGS=$(grep -m1 '^flags\|^Features' /proc/cpuinfo | cut -d: -f2- || true)
+              for f in sse2 ssse3 sse4_1 sse4_2 avx avx2 bmi1 bmi2 avx512f avx512dq avx512bw avx512vl neon asimd sve sve2; do
                 if grep -qw "$f" <<<"$FLAGS"; then echo "- $f: **yes**"; else echo "- $f: no"; fi
               done
               if grep -qw avx512f <<<"$FLAGS"; then
                 echo
-                echo "> AVX-512 flags present on this VM, but vmx-rs has no AVX-512 kernels yet (informational only)."
+                echo "> AVX-512 flags present — \`avx512\` path will be included when BMI2 is also available."
               else
                 echo
-                echo "> No AVX-512 on this runner (typical for GitHub-hosted)."
+                echo "> No AVX-512 on this runner (typical for GitHub-hosted x64)."
+              fi
+              if grep -qw sve <<<"$FLAGS"; then
+                echo "> SVE present — nightly \`sve\` feature bench will run on this job."
               fi
             elif command -v sysctl >/dev/null; then
               sysctl machdep.cpu.brand_string hw.physicalcpu hw.logicalcpu 2>/dev/null || true
@@ -120,6 +128,16 @@ jobs:
           export SIMD_BENCH_MD="simd-bench-portable.md"
           export SIMD_BENCH_DIR="simd-bench-out/portable"
           CARGO="cargo +nightly" FEATURES="--features portable-simd" \
+            ./scripts/simd_bench_matrix.sh "$BENCH_W" "$BENCH_H" "$BENCH_ITERS"
+
+      - name: Nightly SVE paths (ARM)
+        if: matrix.sve == '1'
+        shell: bash
+        run: |
+          set -euo pipefail
+          export SIMD_BENCH_MD="simd-bench-sve.md"
+          export SIMD_BENCH_DIR="simd-bench-out/sve"
+          CARGO="cargo +nightly" FEATURES="--features sve" \
             ./scripts/simd_bench_matrix.sh "$BENCH_W" "$BENCH_H" "$BENCH_ITERS"
 
       - name: Microkernel release tests (portable vs scalar)
@@ -158,5 +176,6 @@ jobs:
             simd-bench-out/
             simd-bench-stable.md
             simd-bench-portable.md
+            simd-bench-sve.md
             micro-portable.txt
           if-no-files-found: ignore

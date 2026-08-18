@@ -85,6 +85,8 @@ fn parse_simd_path(s: &str) -> Option<SimdPath> {
         "avx2" => Some(SimdPath::Avx2),
         "avx512" => Some(SimdPath::Avx512),
         "neon" => Some(SimdPath::Neon),
+        #[cfg(feature = "sve")]
+        "sve" | "sve2" => Some(SimdPath::Sve),
         #[cfg(feature = "portable-simd")]
         "portable" => Some(SimdPath::Portable),
         "auto" | "" => None,
@@ -99,6 +101,8 @@ fn parse_color_path(s: &str) -> Option<ColorSimdPath> {
         "avx2" => Some(ColorSimdPath::Avx2),
         "avx512" => Some(ColorSimdPath::Avx512),
         "neon" => Some(ColorSimdPath::Neon),
+        #[cfg(feature = "sve")]
+        "sve" | "sve2" => Some(ColorSimdPath::Sve),
         #[cfg(feature = "portable-simd")]
         "portable" => Some(ColorSimdPath::Portable),
         "auto" | "" => None,
@@ -153,6 +157,17 @@ fn simd_path_supported(path: SimdPath) -> bool {
                 false
             }
         }
+        #[cfg(feature = "sve")]
+        SimdPath::Sve => {
+            #[cfg(target_arch = "aarch64")]
+            {
+                std::arch::is_aarch64_feature_detected!("sve")
+            }
+            #[cfg(not(target_arch = "aarch64"))]
+            {
+                false
+            }
+        }
     }
 }
 
@@ -195,6 +210,17 @@ fn color_path_supported(path: ColorSimdPath) -> bool {
             #[cfg(target_arch = "aarch64")]
             {
                 true
+            }
+            #[cfg(not(target_arch = "aarch64"))]
+            {
+                false
+            }
+        }
+        #[cfg(feature = "sve")]
+        ColorSimdPath::Sve => {
+            #[cfg(target_arch = "aarch64")]
+            {
+                std::arch::is_aarch64_feature_detected!("sve")
             }
             #[cfg(not(target_arch = "aarch64"))]
             {
@@ -245,7 +271,7 @@ fn bench_resolution(
 
     let caps = enc.simd_capabilities();
     println!(
-        "=== {width}x{height} path={} color={} caps={{ssse3:{},sse42:{},avx2:{},bmi2:{},avx512:{},neon:{}}} ===",
+        "=== {width}x{height} path={} color={} caps={{ssse3:{},sse42:{},avx2:{},bmi2:{},avx512:{},neon:{},sve:{},sve2:{}}} ===",
         enc.simd_path(),
         enc.color_simd_path(),
         caps.ssse3,
@@ -253,7 +279,9 @@ fn bench_resolution(
         caps.avx2,
         caps.bmi2,
         caps.avx512,
-        caps.neon
+        caps.neon,
+        caps.sve,
+        caps.sve2
     );
 
     let (uyvy, uyvy_stride) = make_uyvy(width, height);

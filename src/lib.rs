@@ -2,9 +2,14 @@
 //!
 //! No native library linkage. SIMD paths use `std::arch` with runtime dispatch.
 //! Optional nightly `portable-simd` feature adds a `std::simd` fallback path.
+//! Optional nightly `sve` feature enables AArch64 SVE/SVE2 color kernels.
 
 #![allow(clippy::too_many_arguments)]
 #![cfg_attr(feature = "portable-simd", feature(portable_simd))]
+#![cfg_attr(
+    all(feature = "sve", target_arch = "aarch64"),
+    feature(stdarch_aarch64_sve)
+)]
 
 mod bitrate;
 mod bitstream;

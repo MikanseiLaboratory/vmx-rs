@@ -9,6 +9,8 @@ pub mod portable;
 pub mod safety;
 pub mod scalar;
 pub mod sse128;
+#[cfg(feature = "sve")]
+pub mod sve;
 
 #[cfg(test)]
 mod path_tests;

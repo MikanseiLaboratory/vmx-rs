@@ -139,16 +139,22 @@ fn x86_path_is_avx2_or_sse128_or_scalar() {
         #[cfg(feature = "portable-simd")]
         SimdPath::Portable => {}
         SimdPath::Neon => panic!("Neon must not be selected on x86_64"),
+        #[cfg(feature = "sve")]
+        SimdPath::Sve => panic!("Sve must not be selected on x86_64"),
     }
 }
 
 #[cfg(target_arch = "aarch64")]
 #[test]
-fn aarch64_path_is_neon_or_scalar() {
+fn aarch64_path_is_neon_or_sve_or_scalar() {
     let codec = Codec::new(Config::new(1920, 1080)).unwrap();
     match codec.simd_path() {
+        #[cfg(feature = "sve")]
+        SimdPath::Sve => assert!(codec.simd_capabilities().sve),
         SimdPath::Neon => assert!(codec.simd_capabilities().neon),
         SimdPath::Scalar => {}
+        #[cfg(feature = "portable-simd")]
+        SimdPath::Portable => {}
         other => panic!("unexpected path on aarch64: {other}"),
     }
 }

@@ -46,3 +46,18 @@ jobs:
       - run: cargo +nightly clippy --features portable-simd --all-targets -- -D warnings -A clippy::chunks_exact_to_as_chunks
       - run: cargo +nightly test --features portable-simd
       - run: cargo +nightly test --release --features portable-simd --lib -- portable
+
+  # Optional nightly AArch64 SVE/SVE2 (cross-compile + detect on ARM runners).
+  sve-nightly-aarch64:
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          targets: aarch64-unknown-linux-gnu
+          components: clippy
+      - run: cargo +nightly clippy --features sve --all-targets -- -D warnings -A clippy::chunks_exact_to_as_chunks
+      - run: cargo +nightly test --features sve
+      - name: Report SVE capability
+        run: |
+          cargo +nightly run --quiet --features sve --example simd_report -- 64 64 1 auto auto | head -5 || true

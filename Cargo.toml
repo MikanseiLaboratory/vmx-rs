@@ -17,6 +17,9 @@ default = []
 # Nightly-only portable SIMD path (`std::simd`). Requires:
 #   rustup run nightly cargo build --features portable-simd
 portable-simd = []
+# Nightly-only AArch64 SVE/SVE2 path (`stdarch_aarch64_sve`). Requires:
+#   rustup run nightly cargo build --features sve --target aarch64-unknown-linux-gnu
+sve = []
 
 [dependencies]
 thiserror = "2"

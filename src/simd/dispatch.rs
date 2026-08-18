@@ -20,6 +20,10 @@ pub struct SimdCapabilities {
     pub bmi2: bool,
     pub avx512: bool,
     pub neon: bool,
+    /// AArch64 SVE (FEAT_SVE).
+    pub sve: bool,
+    /// AArch64 SVE2 (FEAT_SVE2).
+    pub sve2: bool,
 }
 
 /// Historical alias retained for compatibility with earlier vmx-rs APIs.
@@ -37,6 +41,8 @@ impl SimdCapabilities {
                 bmi2: is_x86_feature_detected!("bmi2"),
                 avx512: is_x86_feature_detected!("avx512f") && is_x86_feature_detected!("avx512bw"),
                 neon: false,
+                sve: false,
+                sve2: false,
             }
         }
         #[cfg(target_arch = "aarch64")]
@@ -53,6 +59,19 @@ impl SimdCapabilities {
                     true
                 }
             };
+            let (sve, sve2) = {
+                #[cfg(any(target_os = "linux", target_os = "android"))]
+                {
+                    (
+                        std::arch::is_aarch64_feature_detected!("sve"),
+                        std::arch::is_aarch64_feature_detected!("sve2"),
+                    )
+                }
+                #[cfg(not(any(target_os = "linux", target_os = "android")))]
+                {
+                    (false, false)
+                }
+            };
             Self {
                 ssse3: false,
                 sse42: false,
@@ -60,6 +79,8 @@ impl SimdCapabilities {
                 bmi2: false,
                 avx512: false,
                 neon,
+                sve,
+                sve2,
             }
         }
         #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
@@ -92,7 +113,7 @@ impl SimdCapabilities {
     /// Priority:
     /// - x86_64: AVX-512 (if AVX512F+BW+BMI2 and `uv_width % 32 == 0`) →
     ///   AVX2 (if AVX2+BMI2 and `uv_width % 16 == 0`) → SSE128 → Scalar
-    /// - aarch64: Neon (when reported) → Scalar
+    /// - aarch64: SVE (opt-in `sve` feature + FEAT_SVE) → Neon → Scalar
     /// - other: Scalar
     pub fn select_path(self, uv_width: usize) -> SimdPath {
         Self::select_path_with(self, uv_width)
@@ -102,7 +123,7 @@ impl SimdCapabilities {
     pub fn select_path_with(caps: Self, uv_width: usize) -> SimdPath {
         #[cfg(target_arch = "x86_64")]
         {
-            let _ = caps.neon;
+            let _ = (caps.neon, caps.sve, caps.sve2);
             if caps.avx512_bmi2() && uv_width.is_multiple_of(32) {
                 return SimdPath::Avx512;
             }
@@ -124,6 +145,10 @@ impl SimdCapabilities {
         #[cfg(target_arch = "aarch64")]
         {
             let _ = uv_width;
+            #[cfg(feature = "sve")]
+            if caps.sve {
+                return SimdPath::Sve;
+            }
             if caps.neon {
                 return SimdPath::Neon;
             }
@@ -172,6 +197,10 @@ pub enum SimdPath {
     Avx512,
     /// AArch64 NEON 128-bit path.
     Neon,
+    /// AArch64 SVE/SVE2 path (nightly `sve` feature). Plane DCT uses NEON 8×8;
+    /// color conversion can use scalable SVE kernels.
+    #[cfg(feature = "sve")]
+    Sve,
     /// Nightly `std::simd` portable path (`portable-simd` feature).
     #[cfg(feature = "portable-simd")]
     Portable,
@@ -186,6 +215,8 @@ impl SimdPath {
             Self::Avx2 => "avx2",
             Self::Avx512 => "avx512",
             Self::Neon => "neon",
+            #[cfg(feature = "sve")]
+            Self::Sve => "sve",
             #[cfg(feature = "portable-simd")]
             Self::Portable => "portable",
         }
@@ -212,6 +243,8 @@ mod tests {
             bmi2: true,
             avx512: false,
             neon: false,
+            sve: false,
+            sve2: false,
         };
         assert_eq!(
             SimdCapabilities::select_path_with(caps, 960),
@@ -242,6 +275,8 @@ mod tests {
             bmi2: false,
             avx512: false,
             neon: false,
+            sve: false,
+            sve2: false,
         };
         #[cfg(feature = "portable-simd")]
         let expected_fallback = SimdPath::Portable;
@@ -270,6 +305,8 @@ mod tests {
         assert_eq!(SimdPath::Avx2.to_string(), "avx2");
         assert_eq!(SimdPath::Avx512.to_string(), "avx512");
         assert_eq!(SimdPath::Neon.to_string(), "neon");
+        #[cfg(feature = "sve")]
+        assert_eq!(SimdPath::Sve.to_string(), "sve");
         #[cfg(feature = "portable-simd")]
         assert_eq!(SimdPath::Portable.to_string(), "portable");
     }
@@ -282,5 +319,17 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(SimdCapabilities::select_path_with(caps, 7), SimdPath::Neon);
+    }
+
+    #[cfg(all(target_arch = "aarch64", feature = "sve"))]
+    #[test]
+    fn aarch64_prefers_sve_when_feature_and_capable() {
+        let caps = SimdCapabilities {
+            neon: true,
+            sve: true,
+            sve2: true,
+            ..Default::default()
+        };
+        assert_eq!(SimdCapabilities::select_path_with(caps, 7), SimdPath::Sve);
     }
 }

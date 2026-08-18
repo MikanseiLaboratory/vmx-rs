@@ -24,11 +24,19 @@ pub fn encode_plane(
         SimdPath::Avx512 => {
             crate::simd::avx512::encode_plane(plane, dc, ac, encode_matrix, dc_shift, temp_block)
         }
+        #[cfg(not(target_arch = "x86_64"))]
+        SimdPath::Avx512 => {
+            scalar::encode_plane_scalar(plane, dc, ac, encode_matrix, dc_shift, temp_block)
+        }
         SimdPath::Avx2 => avx2::encode_plane(plane, dc, ac, encode_matrix, dc_shift, temp_block),
         SimdPath::Sse128 => {
             sse128::encode_plane(plane, dc, ac, encode_matrix, dc_shift, temp_block)
         }
         SimdPath::Neon => neon::encode_plane(plane, dc, ac, encode_matrix, dc_shift, temp_block),
+        #[cfg(feature = "sve")]
+        SimdPath::Sve => {
+            crate::simd::sve::encode_plane(plane, dc, ac, encode_matrix, dc_shift, temp_block)
+        }
         #[cfg(feature = "portable-simd")]
         SimdPath::Portable => {
             crate::simd::portable::encode_plane(plane, dc, ac, encode_matrix, dc_shift, temp_block)
@@ -55,11 +63,19 @@ pub fn decode_plane(
         SimdPath::Avx512 => {
             crate::simd::avx512::decode_plane(plane, dc, ac, decode_matrix, dc_shift, temp_block)
         }
+        #[cfg(not(target_arch = "x86_64"))]
+        SimdPath::Avx512 => {
+            scalar::decode_plane_scalar(plane, dc, ac, decode_matrix, dc_shift, temp_block)
+        }
         SimdPath::Avx2 => avx2::decode_plane(plane, dc, ac, decode_matrix, dc_shift, temp_block),
         SimdPath::Sse128 => {
             sse128::decode_plane(plane, dc, ac, decode_matrix, dc_shift, temp_block)
         }
         SimdPath::Neon => neon::decode_plane(plane, dc, ac, decode_matrix, dc_shift, temp_block),
+        #[cfg(feature = "sve")]
+        SimdPath::Sve => {
+            crate::simd::sve::decode_plane(plane, dc, ac, decode_matrix, dc_shift, temp_block)
+        }
         #[cfg(feature = "portable-simd")]
         SimdPath::Portable => {
             crate::simd::portable::decode_plane(plane, dc, ac, decode_matrix, dc_shift, temp_block)

@@ -71,6 +71,9 @@ candidate_paths() {
       ;;
     aarch64|arm64)
       echo "neon|neon|neon"
+      if [[ -n "$FEATURES" ]] && grep -qw sve <<<"$FEATURES"; then
+        echo "sve|sve|sve"
+      fi
       ;;
   esac
 }

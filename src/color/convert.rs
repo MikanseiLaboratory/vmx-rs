@@ -1340,6 +1340,8 @@ mod tests {
                 ColorSimdPath::Avx512,
                 #[cfg(target_arch = "aarch64")]
                 ColorSimdPath::Neon,
+                #[cfg(all(target_arch = "aarch64", feature = "sve"))]
+                ColorSimdPath::Sve,
             ] {
                 #[cfg(target_arch = "x86_64")]
                 {
@@ -1352,6 +1354,14 @@ mod tests {
                     if path == ColorSimdPath::Avx512
                         && !(is_x86_feature_detected!("avx512f")
                             && is_x86_feature_detected!("avx512bw"))
+                    {
+                        continue;
+                    }
+                }
+                #[cfg(all(target_arch = "aarch64", feature = "sve"))]
+                {
+                    if path == ColorSimdPath::Sve
+                        && !std::arch::is_aarch64_feature_detected!("sve")
                     {
                         continue;
                     }

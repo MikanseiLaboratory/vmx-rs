@@ -25,4 +25,4 @@
 #![allow(dead_code)]
 
 /// Documented entry for safety audit tooling.
-pub const SIMD_SAFETY_VERSION: &str = "0.5.0-avx2-neon-dispatch";
+pub const SIMD_SAFETY_VERSION: &str = "0.6.0-avx512-sve-dispatch";

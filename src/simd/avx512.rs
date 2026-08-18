@@ -1,7 +1,7 @@
 //! AVX-512F/BW plane path (x86_64): four adjacent 8×8 blocks per call.
 //!
 //! Selected when `avx512f && avx512bw && bmi2` and chroma width % 32 == 0.
-//! Falls through to the AVX2 dual-block path for edges / missing features.
+//! Does **not** call into the AVX2 plane path — edges use SSE/scalar kernels.
 
 #![allow(dead_code)]
 #![allow(clippy::needless_range_loop)]
@@ -10,9 +10,13 @@ use crate::bitstream::SliceData;
 use crate::codec::plane::PlaneView;
 
 #[cfg(target_arch = "x86_64")]
+use crate::bitstream::{get_2mag_sign, get_int_from_2mag_sign};
+#[cfg(target_arch = "x86_64")]
+use crate::types::SLICE_HEIGHT;
+#[cfg(target_arch = "x86_64")]
 use std::arch::x86_64::*;
 
-/// Encode using AVX-512 when available (else AVX2 / scalar).
+/// Encode using AVX-512 when available (else SSE128 / scalar — never AVX2).
 pub fn encode_plane(
     plane: &PlaneView<'_>,
     dc: &mut SliceData,
@@ -31,11 +35,30 @@ pub fn encode_plane(
                 encode_plane_avx512(plane, dc, ac, encode_matrix, dc_shift, temp_block)
             };
         }
+        // Prefer SSE over AVX2 when this module was selected but CPU lost AVX-512 mid-flight.
+        return crate::simd::sse128::encode_plane(
+            plane,
+            dc,
+            ac,
+            encode_matrix,
+            dc_shift,
+            temp_block,
+        );
     }
-    crate::simd::avx2::encode_plane(plane, dc, ac, encode_matrix, dc_shift, temp_block);
+    #[cfg(not(target_arch = "x86_64"))]
+    {
+        crate::codec::plane::encode_plane_scalar(
+            plane,
+            dc,
+            ac,
+            encode_matrix,
+            dc_shift,
+            temp_block,
+        );
+    }
 }
 
-/// Decode using AVX-512 when available (else AVX2 / scalar).
+/// Decode using AVX-512 when available (else SSE128 / scalar — never AVX2).
 pub fn decode_plane(
     plane: &mut PlaneView<'_>,
     dc: &mut SliceData,
@@ -54,8 +77,26 @@ pub fn decode_plane(
                 decode_plane_avx512(plane, dc, ac, decode_matrix, dc_shift, temp_block)
             };
         }
+        return crate::simd::sse128::decode_plane(
+            plane,
+            dc,
+            ac,
+            decode_matrix,
+            dc_shift,
+            temp_block,
+        );
     }
-    crate::simd::avx2::decode_plane(plane, dc, ac, decode_matrix, dc_shift, temp_block);
+    #[cfg(not(target_arch = "x86_64"))]
+    {
+        crate::codec::plane::decode_plane_scalar(
+            plane,
+            dc,
+            ac,
+            decode_matrix,
+            dc_shift,
+            temp_block,
+        );
+    }
 }
 
 #[cfg(target_arch = "x86_64")]
@@ -145,7 +186,6 @@ pub unsafe fn zig_invquant_idct_avx512_x4(
                     lane[b * 8 + i] = c.wrapping_mul(decode_matrix[idx] as i16) >> 4;
                 }
             }
-            // IDCT row per 8-wide block (bit-exact with scalar).
             for b in 0..4 {
                 let mut x = [0i16; 8];
                 x.copy_from_slice(&lane[b * 8..b * 8 + 8]);
@@ -159,10 +199,8 @@ pub unsafe fn zig_invquant_idct_avx512_x4(
         for (y, row) in out.iter().enumerate() {
             let zero = _mm512_setzero_si512();
             let packed = _mm512_packus_epi16(*row, zero);
-            // packus interleaves 128-bit lanes; extract contiguous 32 bytes carefully.
             let mut tmp = [0u8; 64];
             _mm512_storeu_si512(tmp.as_mut_ptr().cast(), packed);
-            // After packus_epi16(a,0), each 128-bit lane has 8 useful bytes then 8 zeros.
             let mut out32 = [0u8; 32];
             for lane in 0..4 {
                 out32[lane * 8..lane * 8 + 8].copy_from_slice(&tmp[lane * 16..lane * 16 + 8]);
@@ -172,37 +210,94 @@ pub unsafe fn zig_invquant_idct_avx512_x4(
     }
 }
 
+/// Quad-block FDCT+quant+zigzag using AVX-512 loads and SSE4.2 row kernels (not AVX2).
 #[cfg(target_arch = "x86_64")]
-#[target_feature(enable = "avx512f,avx512bw")]
+#[target_feature(enable = "avx512f,avx512bw,sse4.2")]
 unsafe fn fdct_quant_zig_avx512_x4(
     src: *const u8,
     stride: usize,
-    encode_matrix: &[u16],
+    encode_matrix: *const u16,
     add_val: i16,
     outs: &mut [[i16; 64]; 4],
 ) {
-    use crate::codec::dct::fdct_quant_zig;
+    use crate::simd::sse128::fdct_quant_zig_sse;
 
-    // Correctness-first: four scalar FDCT calls into outs, then we still exercise
-    // AVX-512 on the decode/IDCT hot path. Encode uses AVX2 dual below for speed.
-    // (Quad FDCT zmm port is follow-up; IDCT+color are the decode bottleneck.)
+    // Four independent SSE FDCT calls on adjacent 8×8 tiles. This is intentional:
+    // the AVX-512 path must not call AVX2 dual-block kernels.
     unsafe {
         for b in 0..4 {
-            let mut tmp = [0u8; 8 * 32];
-            for y in 0..8 {
-                std::ptr::copy_nonoverlapping(
-                    src.add(y * stride + b * 8),
-                    tmp.as_mut_ptr().add(y * 32),
-                    8,
-                );
-            }
-            fdct_quant_zig(&tmp, 32, encode_matrix, add_val, &mut outs[b]);
+            fdct_quant_zig_sse(
+                src.add(b * 8),
+                stride,
+                encode_matrix,
+                add_val,
+                &mut outs[b],
+            );
         }
     }
 }
 
 #[cfg(target_arch = "x86_64")]
-#[target_feature(enable = "avx512f,avx512bw,bmi2")]
+fn ac_nonzero_mask(coeffs: &[i16; 64]) -> u64 {
+    let mut mask = 0u64;
+    for (i, coeff) in coeffs.iter().enumerate().skip(1) {
+        if *coeff != 0 {
+            mask |= 1u64 << i;
+        }
+    }
+    mask
+}
+
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx512f,avx512bw,bmi2,sse4.2")]
+unsafe fn encode_fdct_block(
+    temp_block: &[i16; 64],
+    dc: &mut SliceData,
+    ac: &mut SliceData,
+    dc_shift: i32,
+    dc_round: i16,
+    dc_pred: &mut i16,
+    num_zeros: &mut u32,
+) {
+    let dc_val = temp_block[0].wrapping_add(dc_round) >> dc_shift;
+    let m_index = ac_nonzero_mask(temp_block);
+
+    dc.encode_dc(dc_val.wrapping_sub(*dc_pred));
+    dc.emit_bits32();
+    *dc_pred = dc_val;
+
+    if m_index == 0 {
+        *num_zeros += 64;
+        return;
+    }
+
+    let mut coded = [0u32; 64];
+    for i in 0..64 {
+        coded[i] = (get_2mag_sign(temp_block[i]) as u32).wrapping_add(1);
+    }
+
+    let mut m = m_index;
+    let nz = m.trailing_zeros() as usize;
+    *num_zeros += nz as u32;
+    ac.encode_zeros(num_zeros);
+    ac.emit_bits32();
+    ac.encode_value(coded[nz]);
+    let mut pos = nz + 1;
+    m >>= nz + 1;
+    ac.emit_bits32();
+    while m != 0 {
+        let zeros = m.trailing_zeros() as usize;
+        ac.encode_zeros_small(zeros as u64);
+        ac.encode_value(coded[pos + zeros]);
+        pos += zeros + 1;
+        m >>= zeros + 1;
+        ac.emit_bits32();
+    }
+    *num_zeros = (64 - pos) as u32;
+}
+
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx512f,avx512bw,bmi2,sse4.2")]
 unsafe fn encode_plane_avx512(
     plane: &PlaneView<'_>,
     dc: &mut SliceData,
@@ -211,13 +306,154 @@ unsafe fn encode_plane_avx512(
     dc_shift: i32,
     temp_block: &mut [i16; 64],
 ) {
-    // Quad FDCT encode still uses the tuned AVX2 dual-block path.
-    let _ = fdct_quant_zig_avx512_x4 as *const ();
-    crate::simd::avx2::encode_plane(plane, dc, ac, encode_matrix, dc_shift, temp_block);
+    use crate::simd::sse128::fdct_quant_zig_sse;
+
+    unsafe {
+        if encode_matrix.len() < 192 {
+            return crate::codec::plane::encode_plane_scalar(
+                plane,
+                dc,
+                ac,
+                encode_matrix,
+                dc_shift,
+                temp_block,
+            );
+        }
+
+        let mut dc_pred = 0i16;
+        let mut num_zeros = 0u32;
+        let add_val = if plane.index == 0 || plane.index == 3 {
+            -128
+        } else {
+            0
+        };
+        let dc_round = if dc_shift > 0 {
+            1i16 << (dc_shift - 1)
+        } else {
+            0
+        };
+        let height = SLICE_HEIGHT as usize;
+        let stride = plane.stride;
+        let base = plane.offset;
+        let mut blocks = [[0i16; 64]; 4];
+
+        for y in (0..height).step_by(8) {
+            let mut x = 0usize;
+            while x < stride {
+                let src_off = base + y * stride + x;
+                let quad = x + 32 <= stride && src_off + 7 * stride + 32 <= plane.data.len();
+                if quad {
+                    fdct_quant_zig_avx512_x4(
+                        plane.data.as_ptr().add(src_off),
+                        stride,
+                        encode_matrix.as_ptr(),
+                        add_val,
+                        &mut blocks,
+                    );
+                    for b in 0..4 {
+                        encode_fdct_block(
+                            &blocks[b],
+                            dc,
+                            ac,
+                            dc_shift,
+                            dc_round,
+                            &mut dc_pred,
+                            &mut num_zeros,
+                        );
+                    }
+                    x += 32;
+                } else {
+                    if src_off + 7 * stride + 8 > plane.data.len() {
+                        x += 8;
+                        continue;
+                    }
+                    fdct_quant_zig_sse(
+                        plane.data.as_ptr().add(src_off),
+                        stride,
+                        encode_matrix.as_ptr(),
+                        add_val,
+                        temp_block,
+                    );
+                    encode_fdct_block(
+                        temp_block,
+                        dc,
+                        ac,
+                        dc_shift,
+                        dc_round,
+                        &mut dc_pred,
+                        &mut num_zeros,
+                    );
+                    x += 8;
+                }
+            }
+        }
+        ac.encode_zeros(&mut num_zeros);
+        ac.emit_bits32();
+        ac.flush_remaining_bits();
+        dc.flush_remaining_bits();
+    }
 }
 
 #[cfg(target_arch = "x86_64")]
-#[target_feature(enable = "avx512f,avx512bw,bmi2")]
+#[inline(always)]
+fn decode_entropy_block(
+    temp_block: &mut [i16; 64],
+    dc: &mut SliceData,
+    ac: &mut SliceData,
+    dc_pred: &mut i16,
+    terms_to_decode: &mut u64,
+    dc_shift: i32,
+) -> bool {
+    temp_block.fill(0);
+    let valid = *terms_to_decode < 64;
+
+    while *terms_to_decode < 64 {
+        let l = ac.peek_golomb_lookup();
+        if l.length != 0 {
+            ac.bits_left -= l.length as i32;
+            temp_block[*terms_to_decode as usize] = l.value as i16;
+            *terms_to_decode += l.zeros as u64;
+        } else {
+            let b = ac.get_bit_b();
+            if b != 0 {
+                let b2 = ac.get_bit_b();
+                if b2 != 0 {
+                    *terms_to_decode += 1;
+                } else {
+                    let mut bc = ac.get_zeros_b();
+                    bc += 2;
+                    let val = ac.get_bits_b(bc as u32);
+                    *terms_to_decode += val;
+                }
+            } else {
+                let mut bc = ac.get_zeros_b();
+                bc += 2;
+                let val = ac.get_bits_b(bc as u32);
+                temp_block[*terms_to_decode as usize] = get_int_from_2mag_sign(val.wrapping_sub(1));
+                *terms_to_decode += 1;
+            }
+        }
+        ac.reload_bits();
+    }
+    *terms_to_decode -= 64;
+
+    let b = dc.get_bit();
+    if b != 0 {
+        let _b2 = dc.get_bit();
+    } else {
+        let mut bc = dc.get_zeros();
+        bc += 2;
+        let val = dc.get_bits(bc as u32);
+        temp_block[0] = get_int_from_2mag_sign(val.wrapping_sub(1));
+        temp_block[0] <<= dc_shift;
+    }
+    temp_block[0] = temp_block[0].wrapping_add(*dc_pred);
+    *dc_pred = temp_block[0];
+    valid
+}
+
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx512f,avx512bw,bmi2,sse4.1,ssse3")]
 unsafe fn decode_plane_avx512(
     plane: &mut PlaneView<'_>,
     dc: &mut SliceData,
@@ -226,10 +462,107 @@ unsafe fn decode_plane_avx512(
     dc_shift: i32,
     temp_block: &mut [i16; 64],
 ) {
-    // Entropy + dual IDCT: reuse AVX2 (bit-exact). AVX-512 x4 IDCT is covered by
-    // unit tests / microbenches; wiring it through slice entropy is a follow-up.
-    let _ = zig_invquant_idct_avx512_x4 as *const ();
-    crate::simd::avx2::decode_plane(plane, dc, ac, decode_matrix, dc_shift, temp_block);
+    use crate::codec::dct::broadcast_dc;
+    use crate::simd::sse128::zig_invquant_idct_sse;
+
+    unsafe {
+        let height = SLICE_HEIGHT as usize;
+        let add_val: i16 = if plane.index == 0 || plane.index == 3 {
+            128
+        } else {
+            0
+        };
+        let mut dc_pred: i16 = 0;
+        let mut terms_to_decode: u64 = 0;
+        let stride = plane.stride;
+        let base = plane.offset;
+        let mut blocks = [[0i16; 64]; 4];
+
+        for y in (0..height).step_by(8) {
+            let mut x = 0usize;
+            while x < stride {
+                let dst_off = base + y * stride + x;
+                let quad = x + 32 <= stride && dst_off + 7 * stride + 32 <= plane.data.len();
+
+                if quad {
+                    let mut valids = [false; 4];
+                    for b in 0..4 {
+                        valids[b] = decode_entropy_block(
+                            &mut blocks[b],
+                            dc,
+                            ac,
+                            &mut dc_pred,
+                            &mut terms_to_decode,
+                            dc_shift,
+                        );
+                    }
+                    if valids.iter().all(|&v| v) {
+                        zig_invquant_idct_avx512_x4(
+                            &mut blocks,
+                            decode_matrix,
+                            plane.data.as_mut_ptr().add(dst_off),
+                            stride,
+                            add_val,
+                        );
+                    } else {
+                        for b in 0..4 {
+                            let off = dst_off + b * 8;
+                            if valids[b] {
+                                zig_invquant_idct_sse(
+                                    &mut blocks[b],
+                                    decode_matrix,
+                                    plane.data.as_mut_ptr().add(off),
+                                    stride,
+                                    add_val,
+                                );
+                            } else {
+                                broadcast_dc(
+                                    blocks[b][0],
+                                    &mut plane.data[off..],
+                                    stride,
+                                    add_val,
+                                );
+                            }
+                        }
+                    }
+                    x += 32;
+                } else {
+                    let valid = decode_entropy_block(
+                        temp_block,
+                        dc,
+                        ac,
+                        &mut dc_pred,
+                        &mut terms_to_decode,
+                        dc_shift,
+                    );
+                    if dst_off + 7 * stride + 8 <= plane.data.len() {
+                        if valid {
+                            zig_invquant_idct_sse(
+                                temp_block,
+                                decode_matrix,
+                                plane.data.as_mut_ptr().add(dst_off),
+                                stride,
+                                add_val,
+                            );
+                        } else {
+                            broadcast_dc(
+                                temp_block[0],
+                                &mut plane.data[dst_off..],
+                                stride,
+                                add_val,
+                            );
+                        }
+                    }
+                    x += 8;
+                }
+            }
+        }
+
+        // Match SSE/AVX2: undo AC over-read and byte-align both streams.
+        ac.rewind_overread(terms_to_decode);
+        dc.flush_remaining_read_bits();
+        ac.flush_remaining_read_bits();
+    }
 }
 
 #[cfg(all(test, target_arch = "x86_64"))]
@@ -328,5 +661,56 @@ mod tests {
             avx512 < scalar,
             "AVX-512 IDCT should beat 4× scalar (scalar={scalar:?} avx512={avx512:?})"
         );
+    }
+
+    #[test]
+    fn avx512_plane_encode_matches_scalar_when_available() {
+        if !(is_x86_feature_detected!("avx512f")
+            && is_x86_feature_detected!("avx512bw")
+            && is_x86_feature_detected!("bmi2")
+            && is_x86_feature_detected!("sse4.2"))
+        {
+            return;
+        }
+        use crate::bitstream::SliceData;
+        use crate::codec::plane::{PlaneView, encode_plane_scalar};
+        use crate::types::SLICE_HEIGHT;
+
+        let stride = 64usize;
+        let height = SLICE_HEIGHT as usize;
+        let mut data = vec![0u8; stride * height];
+        for (i, b) in data.iter_mut().enumerate() {
+            *b = ((i * 37 + 11) % 220) as u8 + 16;
+        }
+        let mut matrix = vec![0u16; 192];
+        for i in 0..64 {
+            matrix[i] = (i as u16 % 5) + 1;
+            matrix[i + 64] = 0x8000 + (i as u16 * 17);
+            matrix[i + 128] = 0x4000 + (i as u16 * 3);
+        }
+
+        let encode = |path_avx512: bool| {
+            let mut d = data.clone();
+            let mut dc = SliceData::new(stride * height * 2);
+            let mut ac = SliceData::new(stride * height * 4);
+            let mut temp = [0i16; 64];
+            let plane = PlaneView {
+                index: 0,
+                data: &mut d,
+                stride,
+                offset: 0,
+            };
+            if path_avx512 {
+                encode_plane(&plane, &mut dc, &mut ac, &matrix, 0, &mut temp);
+            } else {
+                encode_plane_scalar(&plane, &mut dc, &mut ac, &matrix, 0, &mut temp);
+            }
+            (dc.stream, ac.stream)
+        };
+
+        let scalar = encode(false);
+        let avx = encode(true);
+        assert_eq!(avx.0, scalar.0, "DC bitstream mismatch AVX-512 vs scalar");
+        assert_eq!(avx.1, scalar.1, "AC bitstream mismatch AVX-512 vs scalar");
     }
 }

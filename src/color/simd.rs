@@ -23,6 +23,9 @@ pub enum ColorSimdPath {
     Avx512,
     /// NEON.
     Neon,
+    /// AArch64 SVE/SVE2 YUV→BGRA (nightly `sve` feature). BGRA→YUV uses NEON.
+    #[cfg(feature = "sve")]
+    Sve,
     /// Nightly `std::simd` portable path (`portable-simd` feature).
     #[cfg(feature = "portable-simd")]
     Portable,
@@ -53,6 +56,13 @@ impl ColorSimdPath {
         }
         #[cfg(target_arch = "aarch64")]
         {
+            #[cfg(feature = "sve")]
+            {
+                #[cfg(any(target_os = "linux", target_os = "android"))]
+                if std::arch::is_aarch64_feature_detected!("sve") {
+                    return Self::Sve;
+                }
+            }
             Self::Neon
         }
         #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
@@ -77,6 +87,8 @@ impl std::fmt::Display for ColorSimdPath {
             Self::Avx2 => "avx2",
             Self::Avx512 => "avx512",
             Self::Neon => "neon",
+            #[cfg(feature = "sve")]
+            Self::Sve => "sve",
             #[cfg(feature = "portable-simd")]
             Self::Portable => "portable",
         })
@@ -648,6 +660,124 @@ mod arm {
     }
 }
 
+#[cfg(all(target_arch = "aarch64", feature = "sve"))]
+mod arm_sve {
+    use super::yuv_to_bgra_pixel;
+    use std::arch::aarch64::*;
+
+    /// SVE YUV422 → BGRA using scalable i16 lanes.
+    ///
+    /// # Safety
+    /// Caller must ensure FEAT_SVE. Buffers must cover the described band.
+    #[target_feature(enable = "sve")]
+    pub unsafe fn yuv422_band_to_bgra_sve(
+        y: &[u8],
+        y_stride: usize,
+        u: &[u8],
+        u_stride: usize,
+        v: &[u8],
+        v_stride: usize,
+        y_row0: usize,
+        rows: usize,
+        width: usize,
+        dst: &mut [u8],
+        dst_stride: usize,
+        table: &[i16; 5],
+    ) {
+        // Max architectural SVE length is 2048 bits → 128 i16 lanes.
+        const MAX_I16: usize = 128;
+        unsafe {
+            let vl = svcnth() as usize;
+            debug_assert!(vl > 0 && vl <= MAX_I16);
+            let rounding = svdup_n_s16(8);
+            let mut y_tmp = [0i16; MAX_I16];
+            let mut u_tmp = [0i16; MAX_I16];
+            let mut v_tmp = [0i16; MAX_I16];
+            let mut r_tmp = [0i16; MAX_I16];
+            let mut g_tmp = [0i16; MAX_I16];
+            let mut b_tmp = [0i16; MAX_I16];
+
+            for row in 0..rows {
+                let yr = y_row0 + row;
+                let yd = y.as_ptr().add(yr * y_stride);
+                let ud = u.as_ptr().add(yr * u_stride);
+                let vd = v.as_ptr().add(yr * v_stride);
+                let d = dst.as_mut_ptr().add(yr * dst_stride);
+                let mut px = 0usize;
+                while px + 2 <= width {
+                    let remaining = (width - px) & !1; // keep even for 4:2:2
+                    if remaining == 0 {
+                        break;
+                    }
+                    let n = remaining.min(vl);
+                    let pg = svwhilelt_b16_u64(0, n as u64);
+
+                    for i in 0..n {
+                        y_tmp[i] = *yd.add(px + i) as i16;
+                        let c = (px + i) / 2;
+                        u_tmp[i] = *ud.add(c) as i16 - 128;
+                        v_tmp[i] = *vd.add(c) as i16 - 128;
+                    }
+
+                    let mut y0 = svld1_s16(pg, y_tmp.as_ptr());
+                    let mut u0 = svld1_s16(pg, u_tmp.as_ptr());
+                    let mut v0 = svld1_s16(pg, v_tmp.as_ptr());
+
+                    y0 = svqsub_n_s16(y0, 16);
+                    y0 = svlsl_n_s16_x(pg, y0, 6);
+                    y0 = svmulh_n_s16_x(pg, y0, table[0]);
+
+                    v0 = svlsl_n_s16_x(pg, v0, 6);
+                    let mut r = svmulh_n_s16_x(pg, v0, table[1]);
+                    r = svqadd_s16(r, y0);
+
+                    let mut b = svlsl_n_s16_x(pg, u0, 7);
+                    b = svmulh_n_s16_x(pg, b, table[4]);
+                    b = svqadd_s16(b, y0);
+
+                    u0 = svlsl_n_s16_x(pg, u0, 6);
+                    let mut g = svmulh_n_s16_x(pg, u0, table[2]);
+                    let tmp = svmulh_n_s16_x(pg, v0, table[3]);
+                    g = svqsub_s16(y0, g);
+                    g = svqsub_s16(g, tmp);
+
+                    r = svqadd_s16(r, rounding);
+                    g = svqadd_s16(g, rounding);
+                    b = svqadd_s16(b, rounding);
+                    r = svasr_n_s16_x(pg, r, 4);
+                    g = svasr_n_s16_x(pg, g, 4);
+                    b = svasr_n_s16_x(pg, b, 4);
+
+                    svst1_s16(pg, r_tmp.as_mut_ptr(), r);
+                    svst1_s16(pg, g_tmp.as_mut_ptr(), g);
+                    svst1_s16(pg, b_tmp.as_mut_ptr(), b);
+
+                    for i in 0..n {
+                        let o = (px + i) * 4;
+                        *d.add(o) = b_tmp[i].clamp(0, 255) as u8;
+                        *d.add(o + 1) = g_tmp[i].clamp(0, 255) as u8;
+                        *d.add(o + 2) = r_tmp[i].clamp(0, 255) as u8;
+                        *d.add(o + 3) = 255;
+                    }
+                    px += n;
+                }
+                // Odd-width tail (rare for 4:2:2).
+                if px + 1 < width {
+                    let x = px / 2;
+                    let cb = *ud.add(x) as i16 - 128;
+                    let cr = *vd.add(x) as i16 - 128;
+                    let (b, g, r) = yuv_to_bgra_pixel(*yd.add(px), cb, cr, table);
+                    let o = px * 4;
+                    *d.add(o) = b;
+                    *d.add(o + 1) = g;
+                    *d.add(o + 2) = r;
+                    *d.add(o + 3) = 255;
+                }
+            }
+        }
+    }
+}
+
 /// YUV422 band → BGRA via [`ColorSimdPath`].
 pub fn yuv422_band_to_bgra_dispatch(
     path: ColorSimdPath,
@@ -680,6 +810,12 @@ pub fn yuv422_band_to_bgra_dispatch(
         #[cfg(target_arch = "x86_64")]
         ColorSimdPath::Sse2 => unsafe {
             x86::yuv422_band_to_bgra_sse2(
+                y, y_stride, u, u_stride, v, v_stride, y_row0, rows, width, dst, dst_stride, table,
+            )
+        },
+        #[cfg(all(target_arch = "aarch64", feature = "sve"))]
+        ColorSimdPath::Sve => unsafe {
+            arm_sve::yuv422_band_to_bgra_sve(
                 y, y_stride, u, u_stride, v, v_stride, y_row0, rows, width, dst, dst_stride, table,
             )
         },
@@ -1150,6 +1286,13 @@ pub fn bgra_to_yuv4224_dispatch(
         }
         #[cfg(target_arch = "aarch64")]
         ColorSimdPath::Neon => unsafe {
+            arm_bgra::bgra_to_yuv4224_neon(
+                src, src_stride, y, y_stride, u, u_stride, v, v_stride, a, a_stride, size, table,
+            )
+        },
+        #[cfg(all(target_arch = "aarch64", feature = "sve"))]
+        ColorSimdPath::Sve => unsafe {
+            // BGRA→YUV stays on NEON; SVE accelerates YUV→BGRA pack.
             arm_bgra::bgra_to_yuv4224_neon(
                 src, src_stride, y, y_stride, u, u_stride, v, v_stride, a, a_stride, size, table,
             )

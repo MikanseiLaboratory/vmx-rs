@@ -47,22 +47,23 @@ Pure Rust [VMX1](https://github.com/openmediatransport/libvmx) video codec.
 | **SSSE3** | UYVY ↔ planar | Live | [x] |
 | **SSE4.2** | FDCT + quant encode | Live | [x] |
 | **AVX2 + BMI2** | Dual-block plane encode/decode | Live when UV width % 16 == 0 | [x] |
-| **AVX-512F+BW** | Quad IDCT + 32-wide YUV→BGRA | Live when UV width % 32 == 0 | [x] |
+| **AVX-512F+BW** | Quad IDCT + 32-wide YUV→BGRA (no AVX2 plane fallback) | Live when UV width % 32 == 0 | [x] |
 | **NEON** | ARM64 plane encode/decode | Live | [x] |
+| **SVE / SVE2** | ARM64 scalable YUV→BGRA (+ SVE path selects NEON 8×8 DCT) | Opt-in (`sve`, nightly) | [ ] host-dependent |
 | **`std::simd`** | Portable FDCT/IDCT + YUV→BGRA | Opt-in (`portable-simd`, nightly) | [x] |
 
 ### Runtime path reporting
 
 ```rust
 let codec = Codec::new(Config::new(1920, 1080))?;
-println!("path={}", codec.simd_path()); // "avx2" | "sse128" | "neon" | "portable" | "scalar"
+println!("path={}", codec.simd_path()); // "avx2" | "sse128" | "neon" | "sve" | "portable" | "scalar"
 let caps = codec.simd_capabilities();
 ```
 
 Selection priority:
 
 - **x86_64:** AVX-512 if `avx512f+bw && bmi2 && (width/2) % 32 == 0`, else AVX2 if `avx2 && bmi2 && (width/2) % 16 == 0`, else SSE4.2+SSSE3, else `portable` (feature) / Scalar
-- **aarch64:** Neon, else `portable` (feature) / Scalar
+- **aarch64:** SVE if `sve` feature + FEAT_SVE, else Neon, else `portable` (feature) / Scalar
 
 ### Optional nightly portable SIMD
 
@@ -76,6 +77,18 @@ The `portable-simd` feature enables a `std::simd` fallback that accelerates the
 scalar path on hosts without arch-specific kernels (≈4× IDCT, ≈5× YUV→BGRA vs
 scalar in local release measurements). Default stable builds are unchanged.
 
+### Optional nightly SVE / SVE2
+
+```bash
+rustup run nightly cargo test --features sve --target aarch64-unknown-linux-gnu
+rustup run nightly cargo run --release --features sve --example simd_report -- \
+  1920 1080 16 sve sve
+```
+
+Requires nightly (`#![feature(stdarch_aarch64_sve)]`, tracking #145052). Runtime
+detection uses `is_aarch64_feature_detected!("sve"|"sve2")`. The SVE color path
+implements scalable YUV→BGRA; 8×8 plane DCT remains NEON (fixed block size).
+
 ### Cross-ISA CI benchmarks
 
 Workflow [`.github/workflows/simd-bench.yml`](.github/workflows/simd-bench.yml) runs
@@ -84,7 +97,7 @@ Workflow [`.github/workflows/simd-bench.yml`](.github/workflows/simd-bench.yml) 
 | Runner | Typical ISA | Paths compared |
 |--------|-------------|----------------|
 | `ubuntu-latest` | x86_64 AVX2 | auto / scalar / sse128 / avx2 / portable |
-| `ubuntu-24.04-arm` | ARM64 NEON | auto / scalar / neon / portable |
+| `ubuntu-24.04-arm` | ARM64 NEON (±SVE) | auto / scalar / neon / sve / portable |
 | `macos-latest` | Apple Silicon NEON | auto / scalar / neon / portable |
 | `macos-15-intel` | x86_64 AVX2 (if available) | auto / scalar / sse128 / avx2 / portable |
 
@@ -92,9 +105,9 @@ Results land in the job summary and as downloadable artifacts (`simd-bench-*`).
 
 **AVX-512:** Hosted runners may not expose it; this environment does. The workflow
 detects `avx512f`/`avx512bw` and the `avx512` path is included in the timing table
-when available. Plane encode still uses the tuned AVX2 dual-block kernels;
-decode color uses a real 32-wide AVX-512 YUV→BGRA pack, and a quad-block AVX-512
-IDCT kernel is covered by unit/micro benches.
+when available. Plane encode/decode uses dedicated AVX-512 quad-block kernels (SSE
+for edges / FDCT helpers — **not** an AVX2 plane fallback). Decode color uses a
+real 32-wide AVX-512 YUV→BGRA pack.
 
 ## Usage
 

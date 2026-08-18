@@ -14,6 +14,9 @@ path = "src/lib.rs"
 
 [features]
 default = []
+# Nightly-only portable SIMD path (`std::simd`). Requires:
+#   rustup run nightly cargo build --features portable-simd
+portable-simd = []
 
 [dependencies]
 thiserror = "2"

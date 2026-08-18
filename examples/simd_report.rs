@@ -4,9 +4,13 @@
 //!   cargo run --release --example simd_report
 //!   cargo run --release --example simd_report -- 1920 1080 40
 //!   cargo run --release --example simd_report -- 3840 2160 20
+//!
+//! Optional path overrides (4th / 5th args):
+//!   cargo +nightly run --release --features portable-simd --example simd_report -- \
+//!     1920 1080 16 portable portable
 
 use std::time::Instant;
-use vmx::{Codec, Config, Profile};
+use vmx::{Codec, ColorSimdPath, Config, Profile, SimdPath};
 
 fn make_uyvy(width: i32, height: i32) -> (Vec<u8>, usize) {
     let stride = (width as usize) * 2;
@@ -74,7 +78,39 @@ fn timed_iters<F: FnMut()>(warmup: usize, iters: usize, mut body: F) -> Vec<f64>
     samples
 }
 
-fn bench_resolution(width: i32, height: i32, iters: usize) {
+fn parse_simd_path(s: &str) -> Option<SimdPath> {
+    match s.to_ascii_lowercase().as_str() {
+        "scalar" => Some(SimdPath::Scalar),
+        "sse128" | "sse" => Some(SimdPath::Sse128),
+        "avx2" => Some(SimdPath::Avx2),
+        "neon" => Some(SimdPath::Neon),
+        #[cfg(feature = "portable-simd")]
+        "portable" => Some(SimdPath::Portable),
+        "auto" | "" => None,
+        _ => None,
+    }
+}
+
+fn parse_color_path(s: &str) -> Option<ColorSimdPath> {
+    match s.to_ascii_lowercase().as_str() {
+        "scalar" => Some(ColorSimdPath::Scalar),
+        "sse2" | "sse" => Some(ColorSimdPath::Sse2),
+        "avx2" => Some(ColorSimdPath::Avx2),
+        "neon" => Some(ColorSimdPath::Neon),
+        #[cfg(feature = "portable-simd")]
+        "portable" => Some(ColorSimdPath::Portable),
+        "auto" | "" => None,
+        _ => None,
+    }
+}
+
+fn bench_resolution(
+    width: i32,
+    height: i32,
+    iters: usize,
+    force_simd: Option<SimdPath>,
+    force_color: Option<ColorSimdPath>,
+) {
     let mut enc = Codec::new(Config {
         width,
         height,
@@ -89,6 +125,15 @@ fn bench_resolution(width: i32, height: i32, iters: usize) {
         color_space: Default::default(),
     })
     .expect("create decoder");
+
+    if let Some(p) = force_simd {
+        enc.set_simd_path(p);
+        dec.set_simd_path(p);
+    }
+    if let Some(p) = force_color {
+        enc.set_color_simd_path(p);
+        dec.set_color_simd_path(p);
+    }
 
     let caps = enc.simd_capabilities();
     println!(
@@ -108,7 +153,6 @@ fn bench_resolution(width: i32, height: i32, iters: usize) {
     let mut uyvy_out = vec![0u8; uyvy.len()];
     let mut bgra_out = vec![0u8; bgra.len()];
 
-    // Seed bitstream for decode benches.
     enc.encode_uyvy(&uyvy, uyvy_stride).expect("seed encode");
     let encoded_len = enc.save_to(&mut bitstream).expect("seed save");
     let encoded = bitstream[..encoded_len].to_vec();
@@ -156,7 +200,6 @@ fn bench_resolution(width: i32, height: i32, iters: usize) {
         }),
     );
 
-    // Combined encode+save (historical metric).
     report(
         "encode_uyvy+save",
         timed_iters(warmup, iters, || {
@@ -175,14 +218,18 @@ fn main() {
         .and_then(|s| s.parse().ok())
         .unwrap_or(20)
         .max(1);
+    let force_simd = args.next().as_deref().and_then(parse_simd_path);
+    let force_color = args.next().as_deref().and_then(parse_color_path);
 
     println!("simd_report iters={iters} (median over timed samples, warm-up excluded)");
-    bench_resolution(width, height, iters);
+    if force_simd.is_some() || force_color.is_some() {
+        println!("forced path: dct={force_simd:?} color={force_color:?}");
+    }
+    bench_resolution(width, height, iters, force_simd, force_color);
 
-    // Also emit a 4K sample when the primary size is 1080p.
-    if width == 1920 && height == 1080 {
+    if width == 1920 && height == 1080 && force_simd.is_none() && force_color.is_none() {
         let four_k_iters = (iters / 2).max(4);
         println!();
-        bench_resolution(3840, 2160, four_k_iters);
+        bench_resolution(3840, 2160, four_k_iters, None, None);
     }
 }

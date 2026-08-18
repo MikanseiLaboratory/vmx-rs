@@ -259,9 +259,19 @@ impl Codec {
         self.simd_path
     }
 
+    /// Override the DCT execution path (benchmarks / diagnostics).
+    pub fn set_simd_path(&mut self, path: SimdPath) {
+        self.simd_path = path;
+    }
+
     /// Selected color conversion SIMD path.
     pub fn color_simd_path(&self) -> ColorSimdPath {
         self.color_path
+    }
+
+    /// Override the color conversion path (benchmarks / diagnostics).
+    pub fn set_color_simd_path(&mut self, path: ColorSimdPath) {
+        self.color_path = path;
     }
 
     /// Alias for [`Self::simd_capabilities`].

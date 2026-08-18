@@ -31,10 +31,10 @@ Pure Rust [VMX1](https://github.com/openmediatransport/libvmx) video codec.
 |--------|--------|--------|
 | FDCT + quant (8-bit) | SSE4.2 / AVX2+BMI2 | SSE4.2; AVX2 dual-8×8 |
 | FDCT + quant (10/16-bit) | SSE / AVX2 | Unimplemented |
-| IDCT + dequant (8-bit) | SSE / AVX2 | SSE4.1; AVX2 dual-block; NEON |
+| IDCT + dequant (8-bit) | SSE / AVX2 | SSE4.1; AVX2 dual-block; NEON; optional `std::simd` |
 | UYVY ↔ planar | SSSE3 | SSSE3 |
 | planar ↔ UYVY | SSE | SSE2 |
-| Other color formats | SSE | BGRA→YUV encode: SSSE3 (Avx2 path falls through); YUV→BGRA: SSE2/AVX2/NEON; others: scalar |
+| Other color formats | SSE | BGRA→YUV encode: SSSE3 (Avx2 path falls through); YUV→BGRA: SSE2/AVX2/NEON (+ optional `std::simd`); others: scalar |
 | Preview | DC 1/8 | DC 1/8 + planar pack |
 | Slice parallelism | `ThreadTasks` | rayon |
 | ARM64 | sse2neon | Native NEON |
@@ -48,19 +48,32 @@ Pure Rust [VMX1](https://github.com/openmediatransport/libvmx) video codec.
 | **SSE4.2** | FDCT + quant encode | Live | [x] |
 | **AVX2 + BMI2** | Dual-block plane encode/decode | Live when UV width % 16 == 0 | [x] |
 | **NEON** | ARM64 plane encode/decode | Live | [x] |
+| **`std::simd`** | Portable FDCT/IDCT + YUV→BGRA | Opt-in (`portable-simd`, nightly) | [x] |
 
 ### Runtime path reporting
 
 ```rust
 let codec = Codec::new(Config::new(1920, 1080))?;
-println!("path={}", codec.simd_path()); // "avx2" | "sse128" | "neon" | "scalar"
+println!("path={}", codec.simd_path()); // "avx2" | "sse128" | "neon" | "portable" | "scalar"
 let caps = codec.simd_capabilities();
 ```
 
 Selection priority:
 
-- **x86_64:** AVX2 if `avx2 && bmi2 && (width/2) % 16 == 0`, else SSE4.2+SSSE3, else Scalar
-- **aarch64:** Neon, else Scalar
+- **x86_64:** AVX2 if `avx2 && bmi2 && (width/2) % 16 == 0`, else SSE4.2+SSSE3, else `portable` (feature) / Scalar
+- **aarch64:** Neon, else `portable` (feature) / Scalar
+
+### Optional nightly portable SIMD
+
+```bash
+rustup run nightly cargo test --features portable-simd
+rustup run nightly cargo run --release --features portable-simd --example simd_report -- \
+  1920 1080 16 portable portable
+```
+
+The `portable-simd` feature enables a `std::simd` fallback that accelerates the
+scalar path on hosts without arch-specific kernels (≈4× IDCT, ≈5× YUV→BGRA vs
+scalar in local release measurements). Default stable builds are unchanged.
 
 ## Usage
 

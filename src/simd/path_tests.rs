@@ -201,6 +201,41 @@ fn neon_decode_pixels_match_scalar() {
     assert_eq!(neon, scalar, "Neon decode pixels mismatch vs scalar");
 }
 
+#[cfg(feature = "portable-simd")]
+#[test]
+fn portable_encode_matches_scalar() {
+    let (mut data, stride) = test_plane(64);
+    let matrix = identity_matrix();
+    let scalar = {
+        let mut d = data.clone();
+        encode_with(SimdPath::Scalar, &mut d, stride, &matrix)
+    };
+    let portable = encode_with(SimdPath::Portable, &mut data, stride, &matrix);
+    assert_eq!(
+        portable.0, scalar.0,
+        "DC bitstream mismatch portable vs scalar"
+    );
+    assert_eq!(
+        portable.1, scalar.1,
+        "AC bitstream mismatch portable vs scalar"
+    );
+}
+
+#[cfg(feature = "portable-simd")]
+#[test]
+fn portable_decode_pixels_match_scalar() {
+    let (mut data, stride) = test_plane(64);
+    let enc_matrix = identity_matrix();
+    let (dc, ac) = encode_with(SimdPath::Scalar, &mut data, stride, &enc_matrix);
+    let dec_matrix = decode_matrix_ones();
+    let scalar = decode_with(SimdPath::Scalar, 64, &dc, &ac, &dec_matrix);
+    let portable = decode_with(SimdPath::Portable, 64, &dc, &ac, &dec_matrix);
+    assert_eq!(
+        portable, scalar,
+        "portable decode pixels mismatch vs scalar"
+    );
+}
+
 #[test]
 fn encode_plane_scalar_direct_smoke() {
     let (mut data, stride) = test_plane(32);

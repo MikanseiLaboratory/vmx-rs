@@ -21,6 +21,9 @@ pub enum ColorSimdPath {
     Avx2,
     /// NEON.
     Neon,
+    /// Nightly `std::simd` portable path (`portable-simd` feature).
+    #[cfg(feature = "portable-simd")]
+    Portable,
 }
 
 impl ColorSimdPath {
@@ -34,7 +37,14 @@ impl ColorSimdPath {
             if is_x86_feature_detected!("sse2") {
                 return Self::Sse2;
             }
-            Self::Scalar
+            #[cfg(feature = "portable-simd")]
+            {
+                Self::Portable
+            }
+            #[cfg(not(feature = "portable-simd"))]
+            {
+                Self::Scalar
+            }
         }
         #[cfg(target_arch = "aarch64")]
         {
@@ -42,7 +52,14 @@ impl ColorSimdPath {
         }
         #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
         {
-            Self::Scalar
+            #[cfg(feature = "portable-simd")]
+            {
+                Self::Portable
+            }
+            #[cfg(not(feature = "portable-simd"))]
+            {
+                Self::Scalar
+            }
         }
     }
 }
@@ -54,6 +71,8 @@ impl std::fmt::Display for ColorSimdPath {
             Self::Sse2 => "sse2",
             Self::Avx2 => "avx2",
             Self::Neon => "neon",
+            #[cfg(feature = "portable-simd")]
+            Self::Portable => "portable",
         })
     }
 }
@@ -510,6 +529,10 @@ pub fn yuv422_band_to_bgra_dispatch(
                 y, y_stride, u, u_stride, v, v_stride, y_row0, rows, width, dst, dst_stride, table,
             )
         },
+        #[cfg(feature = "portable-simd")]
+        ColorSimdPath::Portable => crate::color::portable::yuv422_band_to_bgra_portable(
+            y, y_stride, u, u_stride, v, v_stride, y_row0, rows, width, dst, dst_stride, table,
+        ),
         _ => crate::color::convert::yuv422_band_to_bgra_scalar(
             y, y_stride, u, u_stride, v, v_stride, y_row0, rows, width, dst, dst_stride, table,
         ),

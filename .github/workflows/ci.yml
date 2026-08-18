@@ -33,3 +33,16 @@ jobs:
           components: clippy
       - run: cargo clippy --all-targets -- -D warnings
       - run: cargo test
+
+  # Optional nightly portable SIMD path (`std::simd`).
+  portable-simd-nightly:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: clippy, rustfmt
+      - run: cargo +nightly fmt --all -- --check
+      - run: cargo +nightly clippy --features portable-simd --all-targets -- -D warnings -A clippy::chunks_exact_to_as_chunks
+      - run: cargo +nightly test --features portable-simd
+      - run: cargo +nightly test --release --features portable-simd --lib -- portable

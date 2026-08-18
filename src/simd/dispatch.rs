@@ -99,7 +99,14 @@ impl SimdCapabilities {
             if caps.sse128() {
                 return SimdPath::Sse128;
             }
-            SimdPath::Scalar
+            #[cfg(feature = "portable-simd")]
+            {
+                SimdPath::Portable
+            }
+            #[cfg(not(feature = "portable-simd"))]
+            {
+                SimdPath::Scalar
+            }
         }
         #[cfg(target_arch = "aarch64")]
         {
@@ -107,12 +114,27 @@ impl SimdCapabilities {
             if caps.neon {
                 return SimdPath::Neon;
             }
-            SimdPath::Scalar
+            #[cfg(feature = "portable-simd")]
+            {
+                SimdPath::Portable
+            }
+            #[cfg(not(feature = "portable-simd"))]
+            {
+                SimdPath::Scalar
+            }
         }
         #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
         {
             let _ = (caps, uv_width);
-            SimdPath::Scalar
+            #[cfg(feature = "portable-simd")]
+            {
+                let _ = caps;
+                SimdPath::Portable
+            }
+            #[cfg(not(feature = "portable-simd"))]
+            {
+                SimdPath::Scalar
+            }
         }
     }
 
@@ -135,16 +157,21 @@ pub enum SimdPath {
     Avx2,
     /// AArch64 NEON 128-bit path.
     Neon,
+    /// Nightly `std::simd` portable path (`portable-simd` feature).
+    #[cfg(feature = "portable-simd")]
+    Portable,
 }
 
 impl SimdPath {
-    /// Stable diagnostic name: `scalar`, `sse128`, `avx2`, or `neon`.
+    /// Stable diagnostic name: `scalar`, `sse128`, `avx2`, `neon`, or `portable`.
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Scalar => "scalar",
             Self::Sse128 => "sse128",
             Self::Avx2 => "avx2",
             Self::Neon => "neon",
+            #[cfg(feature = "portable-simd")]
+            Self::Portable => "portable",
         }
     }
 }
@@ -198,9 +225,13 @@ mod tests {
             bmi2: false,
             neon: false,
         };
+        #[cfg(feature = "portable-simd")]
+        let expected_fallback = SimdPath::Portable;
+        #[cfg(not(feature = "portable-simd"))]
+        let expected_fallback = SimdPath::Scalar;
         assert_eq!(
             SimdCapabilities::select_path_with(only_sse42, 960),
-            SimdPath::Scalar
+            expected_fallback
         );
 
         let both = SimdCapabilities {
@@ -220,6 +251,8 @@ mod tests {
         assert_eq!(SimdPath::Sse128.to_string(), "sse128");
         assert_eq!(SimdPath::Avx2.to_string(), "avx2");
         assert_eq!(SimdPath::Neon.to_string(), "neon");
+        #[cfg(feature = "portable-simd")]
+        assert_eq!(SimdPath::Portable.to_string(), "portable");
     }
 
     #[cfg(target_arch = "aarch64")]

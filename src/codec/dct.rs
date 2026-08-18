@@ -377,7 +377,7 @@ mod tests {
     fn reference_idct(spatial: &[i16; 64]) -> [f64; 64] {
         use std::f64::consts::PI;
         let mut out = [0f64; 64];
-        for (y, row) in out.chunks_exact_mut(8).enumerate() {
+        for (y, row) in out.as_chunks_mut::<8>().0.iter_mut().enumerate() {
             for (x, o) in row.iter_mut().enumerate() {
                 let mut acc = 0f64;
                 for v in 0..8usize {

@@ -1,8 +1,10 @@
 //! Pure Rust VMX1 video codec — byte-compatible with libvmx.
 //!
 //! No native library linkage. SIMD paths use `std::arch` with runtime dispatch.
+//! Optional nightly `portable-simd` feature adds a `std::simd` fallback path.
 
 #![allow(clippy::too_many_arguments)]
+#![cfg_attr(feature = "portable-simd", feature(portable_simd))]
 
 mod bitrate;
 mod bitstream;

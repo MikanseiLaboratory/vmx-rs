@@ -2,6 +2,8 @@ pub mod avx2;
 pub mod dispatch;
 pub mod neon;
 pub mod plane_dispatch;
+#[cfg(feature = "portable-simd")]
+pub mod portable;
 pub mod safety;
 pub mod scalar;
 pub mod sse128;

@@ -25,6 +25,10 @@ pub fn encode_plane(
             sse128::encode_plane(plane, dc, ac, encode_matrix, dc_shift, temp_block)
         }
         SimdPath::Neon => neon::encode_plane(plane, dc, ac, encode_matrix, dc_shift, temp_block),
+        #[cfg(feature = "portable-simd")]
+        SimdPath::Portable => {
+            crate::simd::portable::encode_plane(plane, dc, ac, encode_matrix, dc_shift, temp_block)
+        }
         SimdPath::Scalar => {
             scalar::encode_plane_scalar(plane, dc, ac, encode_matrix, dc_shift, temp_block)
         }
@@ -48,6 +52,10 @@ pub fn decode_plane(
             sse128::decode_plane(plane, dc, ac, decode_matrix, dc_shift, temp_block)
         }
         SimdPath::Neon => neon::decode_plane(plane, dc, ac, decode_matrix, dc_shift, temp_block),
+        #[cfg(feature = "portable-simd")]
+        SimdPath::Portable => {
+            crate::simd::portable::decode_plane(plane, dc, ac, decode_matrix, dc_shift, temp_block)
+        }
         SimdPath::Scalar => {
             scalar::decode_plane_scalar(plane, dc, ac, decode_matrix, dc_shift, temp_block)
         }

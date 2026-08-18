@@ -129,6 +129,8 @@ fn x86_path_is_avx2_or_sse128_or_scalar() {
             assert!(codec.simd_capabilities().sse128());
         }
         SimdPath::Scalar => {}
+        #[cfg(feature = "portable-simd")]
+        SimdPath::Portable => {}
         SimdPath::Neon => panic!("Neon must not be selected on x86_64"),
     }
 }

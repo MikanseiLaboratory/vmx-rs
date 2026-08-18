@@ -713,7 +713,8 @@ mod arm_sve {
                     let pg = svwhilelt_b16_u64(0, n as u64);
 
                     for i in 0..n {
-                        y_tmp[i] = *yd.add(px + i) as i16;
+                        // Match scalar/NEON: saturating u8 subtract before widening.
+                        y_tmp[i] = (*yd.add(px + i)).saturating_sub(16) as i16;
                         let c = (px + i) / 2;
                         u_tmp[i] = *ud.add(c) as i16 - 128;
                         v_tmp[i] = *vd.add(c) as i16 - 128;
@@ -723,7 +724,6 @@ mod arm_sve {
                     let mut u0 = svld1_s16(pg, u_tmp.as_ptr());
                     let mut v0 = svld1_s16(pg, v_tmp.as_ptr());
 
-                    y0 = svqsub_n_s16(y0, 16);
                     y0 = svlsl_n_s16_x(pg, y0, 6);
                     y0 = svmulh_n_s16_x(pg, y0, table[0]);
 

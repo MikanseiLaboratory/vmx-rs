@@ -33,9 +33,18 @@ detect_cpu_md() {
     echo "- model: ${model:-unknown}"
     local flags
     flags=$(grep -m1 '^flags' /proc/cpuinfo | cut -d: -f2- || true)
-    for f in sse2 ssse3 sse4_2 avx2 bmi2 avx512f avx512bw neon; do
+    for f in sse2 ssse3 sse4_2 avx2 bmi2 avx512f avx512bw neon sve sve2; do
       if grep -qw "$f" <<<"$flags"; then echo "- \`$f\`: yes"; else echo "- \`$f\`: no"; fi
     done
+    # getauxval-style Features line may use different names on some kernels
+    if [[ -r /proc/cpuinfo ]]; then
+      if grep -qi 'Features.*:.*\bsve\b' /proc/cpuinfo 2>/dev/null; then
+        echo "- \`sve\` (Features): yes"
+      fi
+      if grep -qi 'Features.*:.*\bsve2\b' /proc/cpuinfo 2>/dev/null; then
+        echo "- \`sve2\` (Features): yes"
+      fi
+    fi
   elif have_cmd sysctl; then
     sysctl -n machdep.cpu.brand_string 2>/dev/null | sed 's/^/- brand: /' || true
     for k in hw.optional.avx2_0 hw.optional.avx512f hw.optional.AdvSIMD; do

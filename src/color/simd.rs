@@ -19,6 +19,8 @@ pub enum ColorSimdPath {
     Sse2,
     /// AVX2 for YUV→BGRA pack; BGRA→YUV encode still uses SSSE3 128-bit.
     Avx2,
+    /// AVX-512 for YUV→BGRA pack (32 px); BGRA→YUV encode still uses SSSE3.
+    Avx512,
     /// NEON.
     Neon,
     /// Nightly `std::simd` portable path (`portable-simd` feature).
@@ -31,6 +33,9 @@ impl ColorSimdPath {
     pub fn detect() -> Self {
         #[cfg(target_arch = "x86_64")]
         {
+            if is_x86_feature_detected!("avx512f") && is_x86_feature_detected!("avx512bw") {
+                return Self::Avx512;
+            }
             if is_x86_feature_detected!("avx2") {
                 return Self::Avx2;
             }
@@ -70,6 +75,7 @@ impl std::fmt::Display for ColorSimdPath {
             Self::Scalar => "scalar",
             Self::Sse2 => "sse2",
             Self::Avx2 => "avx2",
+            Self::Avx512 => "avx512",
             Self::Neon => "neon",
             #[cfg(feature = "portable-simd")]
             Self::Portable => "portable",
@@ -232,6 +238,154 @@ mod x86 {
                 dst.add(48).cast::<__m128i>(),
                 _mm256_extracti128_si256(bgra_hi, 1),
             );
+        }
+    }
+
+    /// Convert 32 Y / 16 U / 16 V samples to 32 opaque BGRA pixels (512-bit).
+    ///
+    /// # Safety
+    /// AVX-512F+BW required. `y` has 32 bytes, `u`/`v` have 16 bytes, `dst` has 128 bytes.
+    #[target_feature(enable = "avx512f,avx512bw,avx2")]
+    pub unsafe fn yuv422_macropixels_to_bgra32(
+        y: *const u8,
+        u: *const u8,
+        v: *const u8,
+        dst: *mut u8,
+        table: &[i16; 5],
+    ) {
+        unsafe {
+            let rounding = _mm512_set1_epi16(8);
+            let y_bytes = _mm256_loadu_si256(y.cast::<__m256i>());
+            let y_sat = _mm256_subs_epu8(y_bytes, _mm256_set1_epi8(16));
+            let mut y0 = _mm512_cvtepu8_epi16(y_sat);
+
+            let u16_16 = _mm256_cvtepu8_epi16(_mm_loadu_si128(u.cast::<__m128i>()));
+            let v16_16 = _mm256_cvtepu8_epi16(_mm_loadu_si128(v.cast::<__m128i>()));
+            let u16_16 = _mm256_sub_epi16(u16_16, _mm256_set1_epi16(128));
+            let v16_16 = _mm256_sub_epi16(v16_16, _mm256_set1_epi16(128));
+            // Expand each of 16 chroma samples to a duplicated luma pair → 32 lanes.
+            let mut u_tmp = [0i16; 16];
+            let mut v_tmp = [0i16; 16];
+            _mm256_storeu_si256(u_tmp.as_mut_ptr().cast(), u16_16);
+            _mm256_storeu_si256(v_tmp.as_mut_ptr().cast(), v16_16);
+            let mut u_exp = [0i16; 32];
+            let mut v_exp = [0i16; 32];
+            for i in 0..16 {
+                u_exp[i * 2] = u_tmp[i];
+                u_exp[i * 2 + 1] = u_tmp[i];
+                v_exp[i * 2] = v_tmp[i];
+                v_exp[i * 2 + 1] = v_tmp[i];
+            }
+            let mut u0 = _mm512_loadu_si512(u_exp.as_ptr().cast());
+            let mut v0 = _mm512_loadu_si512(v_exp.as_ptr().cast());
+
+            y0 = _mm512_slli_epi16(y0, 6);
+            y0 = _mm512_mulhi_epi16(y0, _mm512_set1_epi16(table[0]));
+
+            v0 = _mm512_slli_epi16(v0, 6);
+            let mut r = _mm512_mulhi_epi16(v0, _mm512_set1_epi16(table[1]));
+            r = _mm512_adds_epi16(r, y0);
+
+            let mut b = _mm512_slli_epi16(u0, 7);
+            b = _mm512_mulhi_epi16(b, _mm512_set1_epi16(table[4]));
+            b = _mm512_adds_epi16(b, y0);
+
+            u0 = _mm512_slli_epi16(u0, 6);
+            let mut g = _mm512_mulhi_epi16(u0, _mm512_set1_epi16(table[2]));
+            let tmp = _mm512_mulhi_epi16(v0, _mm512_set1_epi16(table[3]));
+            g = _mm512_subs_epi16(y0, g);
+            g = _mm512_subs_epi16(g, tmp);
+
+            r = _mm512_adds_epi16(r, rounding);
+            g = _mm512_adds_epi16(g, rounding);
+            b = _mm512_adds_epi16(b, rounding);
+            r = _mm512_srai_epi16(r, 4);
+            g = _mm512_srai_epi16(g, 4);
+            b = _mm512_srai_epi16(b, 4);
+
+            let mut ra = [0i16; 32];
+            let mut ga = [0i16; 32];
+            let mut ba = [0i16; 32];
+            _mm512_storeu_si512(ra.as_mut_ptr().cast(), r);
+            _mm512_storeu_si512(ga.as_mut_ptr().cast(), g);
+            _mm512_storeu_si512(ba.as_mut_ptr().cast(), b);
+            for i in 0..32 {
+                let o = i * 4;
+                *dst.add(o) = ba[i].clamp(0, 255) as u8;
+                *dst.add(o + 1) = ga[i].clamp(0, 255) as u8;
+                *dst.add(o + 2) = ra[i].clamp(0, 255) as u8;
+                *dst.add(o + 3) = 255;
+            }
+        }
+    }
+
+    /// # Safety
+    /// AVX-512F+BW required. Buffers must cover the described band.
+    #[target_feature(enable = "avx512f,avx512bw,avx2")]
+    pub unsafe fn yuv422_band_to_bgra_avx512(
+        y: &[u8],
+        y_stride: usize,
+        u: &[u8],
+        u_stride: usize,
+        v: &[u8],
+        v_stride: usize,
+        y_row0: usize,
+        rows: usize,
+        width: usize,
+        dst: &mut [u8],
+        dst_stride: usize,
+        table: &[i16; 5],
+    ) {
+        unsafe {
+            for row in 0..rows {
+                let yr = y_row0 + row;
+                let yd = y.as_ptr().add(yr * y_stride);
+                let ud = u.as_ptr().add(yr * u_stride);
+                let vd = v.as_ptr().add(yr * v_stride);
+                let d = dst.as_mut_ptr().add(yr * dst_stride);
+                let mut x = 0usize;
+                let mut px = 0usize;
+                while px + 32 <= width {
+                    yuv422_macropixels_to_bgra32(
+                        yd.add(px),
+                        ud.add(x),
+                        vd.add(x),
+                        d.add(px * 4),
+                        table,
+                    );
+                    x += 16;
+                    px += 32;
+                }
+                while px + 16 <= width {
+                    yuv422_macropixels_to_bgra16(
+                        yd.add(px),
+                        ud.add(x),
+                        vd.add(x),
+                        d.add(px * 4),
+                        table,
+                    );
+                    x += 8;
+                    px += 16;
+                }
+                if px + 8 <= width {
+                    while px + 8 <= width {
+                        yuv422_macropixels_to_bgra8(
+                            yd.add(px),
+                            ud.add(x),
+                            vd.add(x),
+                            d.add(px * 4),
+                            table,
+                        );
+                        x += 4;
+                        px += 8;
+                    }
+                }
+                while px + 1 < width {
+                    scalar_tail_pair(yd, ud, vd, d, x, px, table);
+                    x += 1;
+                    px += 2;
+                }
+            }
         }
     }
 
@@ -511,6 +665,12 @@ pub fn yuv422_band_to_bgra_dispatch(
     table: &[i16; 5],
 ) {
     match path {
+        #[cfg(target_arch = "x86_64")]
+        ColorSimdPath::Avx512 => unsafe {
+            x86::yuv422_band_to_bgra_avx512(
+                y, y_stride, u, u_stride, v, v_stride, y_row0, rows, width, dst, dst_stride, table,
+            )
+        },
         #[cfg(target_arch = "x86_64")]
         ColorSimdPath::Avx2 => unsafe {
             x86::yuv422_band_to_bgra_avx2(
@@ -972,7 +1132,7 @@ pub fn bgra_to_yuv4224_dispatch(
 ) {
     match path {
         #[cfg(target_arch = "x86_64")]
-        ColorSimdPath::Avx2 | ColorSimdPath::Sse2 => {
+        ColorSimdPath::Avx512 | ColorSimdPath::Avx2 | ColorSimdPath::Sse2 => {
             // Avx2 encode falls through here: SSSE3+SSE4.1 128-bit (libvmx has no AVX2 BGRA encode).
             if is_x86_feature_detected!("ssse3") && is_x86_feature_detected!("sse4.1") {
                 unsafe {

@@ -1336,6 +1336,8 @@ mod tests {
                 ColorSimdPath::Sse2,
                 #[cfg(target_arch = "x86_64")]
                 ColorSimdPath::Avx2,
+                #[cfg(target_arch = "x86_64")]
+                ColorSimdPath::Avx512,
                 #[cfg(target_arch = "aarch64")]
                 ColorSimdPath::Neon,
             ] {
@@ -1345,6 +1347,12 @@ mod tests {
                         continue;
                     }
                     if path == ColorSimdPath::Avx2 && !is_x86_feature_detected!("avx2") {
+                        continue;
+                    }
+                    if path == ColorSimdPath::Avx512
+                        && !(is_x86_feature_detected!("avx512f")
+                            && is_x86_feature_detected!("avx512bw"))
+                    {
                         continue;
                     }
                 }
@@ -1688,6 +1696,19 @@ mod tests {
                 assert!(
                     avx * 3 < scalar * 2,
                     "AVX2 BGRA pack should be >1.5x faster than scalar (scalar={scalar:?} avx={avx:?})"
+                );
+            }
+            if is_x86_feature_detected!("avx512f") && is_x86_feature_detected!("avx512bw") {
+                let a512 = time_path(ColorSimdPath::Avx512);
+                eprintln!(
+                    "yuv422→bgra 1080p scalar={:.3}ms avx512={:.3}ms ({:.2}x)",
+                    scalar.as_secs_f64() * 1000.0 / iters as f64,
+                    a512.as_secs_f64() * 1000.0 / iters as f64,
+                    scalar.as_secs_f64() / a512.as_secs_f64().max(1e-12)
+                );
+                assert!(
+                    a512 < scalar,
+                    "AVX-512 BGRA pack should beat scalar (scalar={scalar:?} avx512={a512:?})"
                 );
             }
         }

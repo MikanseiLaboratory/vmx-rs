@@ -47,6 +47,7 @@ Pure Rust [VMX1](https://github.com/openmediatransport/libvmx) video codec.
 | **SSSE3** | UYVY ↔ planar | Live | [x] |
 | **SSE4.2** | FDCT + quant encode | Live | [x] |
 | **AVX2 + BMI2** | Dual-block plane encode/decode | Live when UV width % 16 == 0 | [x] |
+| **AVX-512F+BW** | Quad IDCT + 32-wide YUV→BGRA | Live when UV width % 32 == 0 | [x] |
 | **NEON** | ARM64 plane encode/decode | Live | [x] |
 | **`std::simd`** | Portable FDCT/IDCT + YUV→BGRA | Opt-in (`portable-simd`, nightly) | [x] |
 
@@ -60,7 +61,7 @@ let caps = codec.simd_capabilities();
 
 Selection priority:
 
-- **x86_64:** AVX2 if `avx2 && bmi2 && (width/2) % 16 == 0`, else SSE4.2+SSSE3, else `portable` (feature) / Scalar
+- **x86_64:** AVX-512 if `avx512f+bw && bmi2 && (width/2) % 32 == 0`, else AVX2 if `avx2 && bmi2 && (width/2) % 16 == 0`, else SSE4.2+SSSE3, else `portable` (feature) / Scalar
 - **aarch64:** Neon, else `portable` (feature) / Scalar
 
 ### Optional nightly portable SIMD
@@ -89,10 +90,11 @@ Workflow [`.github/workflows/simd-bench.yml`](.github/workflows/simd-bench.yml) 
 
 Results land in the job summary and as downloadable artifacts (`simd-bench-*`).
 
-**AVX-512:** GitHub-hosted runners do not reliably expose AVX-512, and this crate
-has no AVX-512 kernels yet. The workflow only *detects* `avx512f` when present.
-For real AVX-512 work you need a self-hosted / cloud VM with the ISA, plus new
-kernels.
+**AVX-512:** Hosted runners may not expose it; this environment does. The workflow
+detects `avx512f`/`avx512bw` and the `avx512` path is included in the timing table
+when available. Plane encode still uses the tuned AVX2 dual-block kernels;
+decode color uses a real 32-wide AVX-512 YUV→BGRA pack, and a quad-block AVX-512
+IDCT kernel is covered by unit/micro benches.
 
 ## Usage
 

@@ -42,7 +42,10 @@ fn simd_path_and_capabilities_are_reported() {
 
     // Path string is one of the documented diagnostics.
     assert!(
-        matches!(path.as_str(), "scalar" | "sse128" | "avx2" | "neon"),
+        matches!(
+            path.as_str(),
+            "scalar" | "sse128" | "avx2" | "avx512" | "neon" | "portable"
+        ),
         "unexpected path {path}"
     );
     assert_eq!(path.to_string(), path.as_str());
@@ -121,6 +124,10 @@ fn cross_path_decode_accepts_encoded_bitstream() {
 fn x86_path_is_avx2_or_sse128_or_scalar() {
     let codec = Codec::new(Config::new(1920, 1080)).unwrap();
     match codec.simd_path() {
+        SimdPath::Avx512 => {
+            let c = codec.simd_capabilities();
+            assert!(c.avx512 && c.bmi2);
+        }
         SimdPath::Avx2 => {
             let c = codec.simd_capabilities();
             assert!(c.avx2 && c.bmi2 && c.sse128());

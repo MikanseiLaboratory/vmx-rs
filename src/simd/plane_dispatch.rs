@@ -20,6 +20,10 @@ pub fn encode_plane(
     temp_block: &mut [i16; 64],
 ) {
     match path {
+        #[cfg(target_arch = "x86_64")]
+        SimdPath::Avx512 => {
+            crate::simd::avx512::encode_plane(plane, dc, ac, encode_matrix, dc_shift, temp_block)
+        }
         SimdPath::Avx2 => avx2::encode_plane(plane, dc, ac, encode_matrix, dc_shift, temp_block),
         SimdPath::Sse128 => {
             sse128::encode_plane(plane, dc, ac, encode_matrix, dc_shift, temp_block)
@@ -47,6 +51,10 @@ pub fn decode_plane(
     temp_block: &mut [i16; 64],
 ) {
     match path {
+        #[cfg(target_arch = "x86_64")]
+        SimdPath::Avx512 => {
+            crate::simd::avx512::decode_plane(plane, dc, ac, decode_matrix, dc_shift, temp_block)
+        }
         SimdPath::Avx2 => avx2::decode_plane(plane, dc, ac, decode_matrix, dc_shift, temp_block),
         SimdPath::Sse128 => {
             sse128::decode_plane(plane, dc, ac, decode_matrix, dc_shift, temp_block)

@@ -83,6 +83,7 @@ fn parse_simd_path(s: &str) -> Option<SimdPath> {
         "scalar" => Some(SimdPath::Scalar),
         "sse128" | "sse" => Some(SimdPath::Sse128),
         "avx2" => Some(SimdPath::Avx2),
+        "avx512" => Some(SimdPath::Avx512),
         "neon" => Some(SimdPath::Neon),
         #[cfg(feature = "portable-simd")]
         "portable" => Some(SimdPath::Portable),
@@ -96,6 +97,7 @@ fn parse_color_path(s: &str) -> Option<ColorSimdPath> {
         "scalar" => Some(ColorSimdPath::Scalar),
         "sse2" | "sse" => Some(ColorSimdPath::Sse2),
         "avx2" => Some(ColorSimdPath::Avx2),
+        "avx512" => Some(ColorSimdPath::Avx512),
         "neon" => Some(ColorSimdPath::Neon),
         #[cfg(feature = "portable-simd")]
         "portable" => Some(ColorSimdPath::Portable),
@@ -123,6 +125,18 @@ fn simd_path_supported(path: SimdPath) -> bool {
             #[cfg(target_arch = "x86_64")]
             {
                 is_x86_feature_detected!("avx2") && is_x86_feature_detected!("bmi2")
+            }
+            #[cfg(not(target_arch = "x86_64"))]
+            {
+                false
+            }
+        }
+        SimdPath::Avx512 => {
+            #[cfg(target_arch = "x86_64")]
+            {
+                is_x86_feature_detected!("avx512f")
+                    && is_x86_feature_detected!("avx512bw")
+                    && is_x86_feature_detected!("bmi2")
             }
             #[cfg(not(target_arch = "x86_64"))]
             {
@@ -161,6 +175,16 @@ fn color_path_supported(path: ColorSimdPath) -> bool {
             #[cfg(target_arch = "x86_64")]
             {
                 is_x86_feature_detected!("avx2")
+            }
+            #[cfg(not(target_arch = "x86_64"))]
+            {
+                false
+            }
+        }
+        ColorSimdPath::Avx512 => {
+            #[cfg(target_arch = "x86_64")]
+            {
+                is_x86_feature_detected!("avx512f") && is_x86_feature_detected!("avx512bw")
             }
             #[cfg(not(target_arch = "x86_64"))]
             {
@@ -221,13 +245,14 @@ fn bench_resolution(
 
     let caps = enc.simd_capabilities();
     println!(
-        "=== {width}x{height} path={} color={} caps={{ssse3:{},sse42:{},avx2:{},bmi2:{},neon:{}}} ===",
+        "=== {width}x{height} path={} color={} caps={{ssse3:{},sse42:{},avx2:{},bmi2:{},avx512:{},neon:{}}} ===",
         enc.simd_path(),
         enc.color_simd_path(),
         caps.ssse3,
         caps.sse42,
         caps.avx2,
         caps.bmi2,
+        caps.avx512,
         caps.neon
     );
 

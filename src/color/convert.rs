@@ -1360,8 +1360,7 @@ mod tests {
                 }
                 #[cfg(all(target_arch = "aarch64", feature = "sve"))]
                 {
-                    if path == ColorSimdPath::Sve
-                        && !std::arch::is_aarch64_feature_detected!("sve")
+                    if path == ColorSimdPath::Sve && !std::arch::is_aarch64_feature_detected!("sve")
                     {
                         continue;
                     }

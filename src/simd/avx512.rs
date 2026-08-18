@@ -36,14 +36,7 @@ pub fn encode_plane(
             };
         }
         // Prefer SSE over AVX2 when this module was selected but CPU lost AVX-512 mid-flight.
-        return crate::simd::sse128::encode_plane(
-            plane,
-            dc,
-            ac,
-            encode_matrix,
-            dc_shift,
-            temp_block,
-        );
+        crate::simd::sse128::encode_plane(plane, dc, ac, encode_matrix, dc_shift, temp_block)
     }
     #[cfg(not(target_arch = "x86_64"))]
     {
@@ -77,14 +70,7 @@ pub fn decode_plane(
                 decode_plane_avx512(plane, dc, ac, decode_matrix, dc_shift, temp_block)
             };
         }
-        return crate::simd::sse128::decode_plane(
-            plane,
-            dc,
-            ac,
-            decode_matrix,
-            dc_shift,
-            temp_block,
-        );
+        crate::simd::sse128::decode_plane(plane, dc, ac, decode_matrix, dc_shift, temp_block)
     }
     #[cfg(not(target_arch = "x86_64"))]
     {
@@ -226,13 +212,7 @@ unsafe fn fdct_quant_zig_avx512_x4(
     // the AVX-512 path must not call AVX2 dual-block kernels.
     unsafe {
         for b in 0..4 {
-            fdct_quant_zig_sse(
-                src.add(b * 8),
-                stride,
-                encode_matrix,
-                add_val,
-                &mut outs[b],
-            );
+            fdct_quant_zig_sse(src.add(b * 8), stride, encode_matrix, add_val, &mut outs[b]);
         }
     }
 }
@@ -516,12 +496,7 @@ unsafe fn decode_plane_avx512(
                                     add_val,
                                 );
                             } else {
-                                broadcast_dc(
-                                    blocks[b][0],
-                                    &mut plane.data[off..],
-                                    stride,
-                                    add_val,
-                                );
+                                broadcast_dc(blocks[b][0], &mut plane.data[off..], stride, add_val);
                             }
                         }
                     }

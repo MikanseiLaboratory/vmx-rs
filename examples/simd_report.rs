@@ -104,6 +104,82 @@ fn parse_color_path(s: &str) -> Option<ColorSimdPath> {
     }
 }
 
+fn simd_path_supported(path: SimdPath) -> bool {
+    match path {
+        SimdPath::Scalar => true,
+        #[cfg(feature = "portable-simd")]
+        SimdPath::Portable => true,
+        SimdPath::Sse128 => {
+            #[cfg(target_arch = "x86_64")]
+            {
+                is_x86_feature_detected!("sse4.2") && is_x86_feature_detected!("ssse3")
+            }
+            #[cfg(not(target_arch = "x86_64"))]
+            {
+                false
+            }
+        }
+        SimdPath::Avx2 => {
+            #[cfg(target_arch = "x86_64")]
+            {
+                is_x86_feature_detected!("avx2") && is_x86_feature_detected!("bmi2")
+            }
+            #[cfg(not(target_arch = "x86_64"))]
+            {
+                false
+            }
+        }
+        SimdPath::Neon => {
+            #[cfg(target_arch = "aarch64")]
+            {
+                true
+            }
+            #[cfg(not(target_arch = "aarch64"))]
+            {
+                false
+            }
+        }
+    }
+}
+
+fn color_path_supported(path: ColorSimdPath) -> bool {
+    match path {
+        ColorSimdPath::Scalar => true,
+        #[cfg(feature = "portable-simd")]
+        ColorSimdPath::Portable => true,
+        ColorSimdPath::Sse2 => {
+            #[cfg(target_arch = "x86_64")]
+            {
+                is_x86_feature_detected!("sse2")
+            }
+            #[cfg(not(target_arch = "x86_64"))]
+            {
+                false
+            }
+        }
+        ColorSimdPath::Avx2 => {
+            #[cfg(target_arch = "x86_64")]
+            {
+                is_x86_feature_detected!("avx2")
+            }
+            #[cfg(not(target_arch = "x86_64"))]
+            {
+                false
+            }
+        }
+        ColorSimdPath::Neon => {
+            #[cfg(target_arch = "aarch64")]
+            {
+                true
+            }
+            #[cfg(not(target_arch = "aarch64"))]
+            {
+                false
+            }
+        }
+    }
+}
+
 fn bench_resolution(
     width: i32,
     height: i32,
@@ -127,10 +203,18 @@ fn bench_resolution(
     .expect("create decoder");
 
     if let Some(p) = force_simd {
+        if !simd_path_supported(p) {
+            eprintln!("skip: dct path {p} not supported on this CPU");
+            return;
+        }
         enc.set_simd_path(p);
         dec.set_simd_path(p);
     }
     if let Some(p) = force_color {
+        if !color_path_supported(p) {
+            eprintln!("skip: color path {p} not supported on this CPU");
+            return;
+        }
         enc.set_color_simd_path(p);
         dec.set_color_simd_path(p);
     }

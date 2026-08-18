@@ -75,6 +75,25 @@ The `portable-simd` feature enables a `std::simd` fallback that accelerates the
 scalar path on hosts without arch-specific kernels (≈4× IDCT, ≈5× YUV→BGRA vs
 scalar in local release measurements). Default stable builds are unchanged.
 
+### Cross-ISA CI benchmarks
+
+Workflow [`.github/workflows/simd-bench.yml`](.github/workflows/simd-bench.yml) runs
+`scripts/simd_bench_matrix.sh` on:
+
+| Runner | Typical ISA | Paths compared |
+|--------|-------------|----------------|
+| `ubuntu-latest` | x86_64 AVX2 | auto / scalar / sse128 / avx2 / portable |
+| `ubuntu-24.04-arm` | ARM64 NEON | auto / scalar / neon / portable |
+| `macos-latest` | Apple Silicon NEON | auto / scalar / neon / portable |
+| `macos-15-intel` | x86_64 AVX2 (if available) | auto / scalar / sse128 / avx2 / portable |
+
+Results land in the job summary and as downloadable artifacts (`simd-bench-*`).
+
+**AVX-512:** GitHub-hosted runners do not reliably expose AVX-512, and this crate
+has no AVX-512 kernels yet. The workflow only *detects* `avx512f` when present.
+For real AVX-512 work you need a self-hosted / cloud VM with the ISA, plus new
+kernels.
+
 ## Usage
 
 ```rust

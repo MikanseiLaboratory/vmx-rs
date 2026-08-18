@@ -44,7 +44,7 @@ fn simd_path_and_capabilities_are_reported() {
     assert!(
         matches!(
             path.as_str(),
-            "scalar" | "sse128" | "avx2" | "avx512" | "neon" | "portable"
+            "scalar" | "sse128" | "avx2" | "avx512" | "neon" | "sve" | "portable"
         ),
         "unexpected path {path}"
     );

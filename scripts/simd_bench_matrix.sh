@@ -69,7 +69,7 @@ extract_ms() {
 candidate_paths() {
   echo "auto|auto|auto"
   echo "scalar|scalar|scalar"
-  if [[ -n "$FEATURES" ]]; then
+  if [[ "$FEATURES" == *portable-simd* ]]; then
     echo "portable|portable|portable"
   fi
   case "$(uname -m)" in
@@ -80,7 +80,7 @@ candidate_paths() {
       ;;
     aarch64|arm64)
       echo "neon|neon|neon"
-      if [[ -n "$FEATURES" ]] && grep -qw sve <<<"$FEATURES"; then
+      if [[ "$FEATURES" == *sve* ]]; then
         echo "sve|sve|sve"
       fi
       ;;

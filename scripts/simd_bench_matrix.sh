@@ -143,7 +143,9 @@ done < <(candidate_paths)
   echo
 } >>"$OUT_MD"
 
-cp "$OUT_MD" "$ARTIFACT_DIR/simd-bench.md"
+if [[ "$(realpath "$OUT_MD" 2>/dev/null || echo "$OUT_MD")" != "$(realpath "$ARTIFACT_DIR/simd-bench.md" 2>/dev/null || echo "$ARTIFACT_DIR/simd-bench.md")" ]]; then
+  cp "$OUT_MD" "$ARTIFACT_DIR/simd-bench.md"
+fi
 cat "$OUT_MD"
 if [[ -n "${GITHUB_STEP_SUMMARY:-}" ]]; then
   cat "$OUT_MD" >>"$GITHUB_STEP_SUMMARY"

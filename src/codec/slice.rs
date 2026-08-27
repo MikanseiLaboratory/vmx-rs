@@ -303,25 +303,26 @@ pub fn decode_slices_coeffs(
     strides: [usize; 3],
     dc_shift: i32,
 ) -> Vec<[Vec<crate::codec::plane::CoeffBlock>; 3]> {
-    let n = slices.len();
-    let mut out = Vec::with_capacity(n);
-    for slice in slices.iter_mut() {
-        prepare_slice_bitstream(slice);
-        let mut dest = [Vec::new(), Vec::new(), Vec::new()];
-        for pi in 0..3 {
-            crate::codec::plane::decode_plane_coeffs(
-                pi,
-                strides[pi],
-                &mut slice.dc,
-                &mut slice.ac,
-                dc_shift,
-                &mut slice.temp_block,
-                &mut dest[pi],
-            );
-        }
-        out.push(dest);
-    }
-    out
+    use rayon::prelude::*;
+    slices
+        .par_iter_mut()
+        .map(|slice| {
+            prepare_slice_bitstream(slice);
+            let mut dest = [Vec::new(), Vec::new(), Vec::new()];
+            for pi in 0..3 {
+                crate::codec::plane::decode_plane_coeffs(
+                    pi,
+                    strides[pi],
+                    &mut slice.dc,
+                    &mut slice.ac,
+                    dc_shift,
+                    &mut slice.temp_block,
+                    &mut dest[pi],
+                );
+            }
+            dest
+        })
+        .collect()
 }
 
 /// Golomb-encode full-frame zigzag blocks into slices (Y/U/V).

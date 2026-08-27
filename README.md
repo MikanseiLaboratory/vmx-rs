@@ -95,10 +95,13 @@ Callers pass their existing `Device` / `Queue`. After `load_from`,
 texture (the API waits for GPU completion). `encode_from_texture` accepts
 `Bgra8Unorm` or `Rgba8Unorm` with `COPY_SRC` and is followed by `save_to`.
 
-Integer AAN IDCT/FDCT matches the CPU scalar 8-bit path.
+Decode IDCT is a float AAN on the GPU (same dequant scale as CPU, 8-bit clamp
+at store). Encode keeps integer FDCT + VMX quant so the bitstream is valid
+VMX. One submit per frame, persistent buffers.
 
 ```bash
 cargo test --features wgpu
+cargo run --release --example gpu_bench --features wgpu
 ```
 
 ## License

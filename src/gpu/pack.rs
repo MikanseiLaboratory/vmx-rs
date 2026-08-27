@@ -1,70 +1,45 @@
-//! Sparse coefficient packing for GPU IDCT.
+//! Dense zigzag coefficient packing for GPU IDCT.
 
 use crate::codec::plane::CoeffBlock;
 
-/// GPU-uploadable sparse coeff plane.
+/// GPU-uploadable dense zigzag plane (64 i16 per 8×8 block).
 #[derive(Clone, Debug, Default)]
-pub struct PlanePack {
+pub struct DensePlane {
     pub blocks_x: u32,
     pub blocks_y: u32,
     pub stride: u32,
     pub add_val: i32,
-    pub dc: Vec<i32>,
+    pub coeffs: Vec<i16>,
     pub valid: Vec<u32>,
-    pub nnz: Vec<u32>,
-    pub ac_off: Vec<u32>,
-    pub ac_idx: Vec<u32>,
-    pub ac_val: Vec<i32>,
 }
 
-impl PlanePack {
-    pub fn from_slice_blocks(stride: usize, add_val: i32, slices: &[Vec<CoeffBlock>]) -> Self {
+impl DensePlane {
+    pub fn from_packs(
+        packs: &[[Vec<CoeffBlock>; 3]],
+        plane: usize,
+        stride: usize,
+        add_val: i32,
+    ) -> Self {
+        let n: usize = packs.iter().map(|s| s[plane].len()).sum();
         let blocks_x = (stride / 8) as u32;
-        let mut blocks_y = 0u32;
-        let mut dc = Vec::new();
-        let mut valid = Vec::new();
-        let mut nnz = Vec::new();
-        let mut ac_off = Vec::new();
-        let mut ac_idx = Vec::new();
-        let mut ac_val = Vec::new();
-        ac_off.push(0);
-        for slice in slices {
-            let slice_by = if blocks_x == 0 {
-                0
-            } else {
-                (slice.len() as u32) / blocks_x.max(1)
-            };
-            blocks_y += slice_by;
-            for block in slice {
-                dc.push(i32::from(block.coeffs[0]));
-                valid.push(u32::from(block.valid));
-                let mut n = 0u32;
-                for (i, &c) in block.coeffs.iter().enumerate().skip(1) {
-                    if c != 0 {
-                        ac_idx.push(i as u32);
-                        ac_val.push(i32::from(c));
-                        n += 1;
-                    }
-                }
-                nnz.push(n);
-                ac_off.push(ac_idx.len() as u32);
+        let mut coeffs = vec![0i16; n * 64];
+        let mut valid = vec![0u32; n.max(1)];
+        let mut bi = 0usize;
+        for slice in packs {
+            for block in &slice[plane] {
+                coeffs[bi * 64..bi * 64 + 64].copy_from_slice(&block.coeffs);
+                valid[bi] = u32::from(block.valid);
+                bi += 1;
             }
         }
-        if ac_idx.is_empty() {
-            ac_idx.push(0);
-            ac_val.push(0);
-        }
+        let blocks_y = (bi as u32).checked_div(blocks_x).unwrap_or(0);
         Self {
             blocks_x,
             blocks_y,
             stride: stride as u32,
             add_val,
-            dc,
+            coeffs,
             valid,
-            nnz,
-            ac_off,
-            ac_idx,
-            ac_val,
         }
     }
 

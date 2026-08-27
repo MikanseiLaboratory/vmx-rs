@@ -1,17 +1,15 @@
 mod pack;
 
-use wgpu::util::DeviceExt;
-
 use crate::codec::slice::{decode_slices_coeffs, encode_slices_from_coeffs};
 use crate::color::convert::select_yuv_rgb;
 use crate::error::{Result, VmxError};
-use crate::gpu::pack::PlanePack;
+use crate::gpu::pack::DensePlane;
 use crate::instance::Codec;
 use crate::tables::{
     FTAB1_128, FTAB2_128, FTAB3_128, FTAB4_128, IDCT_ROW_TABLES, RGB_YUV_601, RGB_YUV_709,
     ZIGZAG_INV,
 };
-use crate::types::ColorSpace;
+use crate::types::{ColorSpace, align_up};
 
 const RING: usize = 3;
 const COPY_ALIGN: u32 = 256;
@@ -76,24 +74,44 @@ fn padded_bpr(width: u32) -> u32 {
     raw.div_ceil(COPY_ALIGN) * COPY_ALIGN
 }
 
-fn make_buffer(
-    device: &wgpu::Device,
-    data: &[u8],
-    usage: wgpu::BufferUsages,
-    label: &str,
-) -> wgpu::Buffer {
-    let mut bytes = data.to_vec();
-    if bytes.is_empty() {
-        bytes.resize(4, 0);
-    }
-    while !bytes.len().is_multiple_of(4) {
-        bytes.push(0);
-    }
-    device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+fn y_stride(width: u32) -> u32 {
+    align_up(width as i32, 8) as u32
+}
+
+fn uv_stride(width: u32) -> u32 {
+    align_up((width / 2) as i32, 8) as u32
+}
+
+fn aligned_height(height: u32) -> u32 {
+    align_up(height as i32, 16) as u32
+}
+
+fn buf(device: &wgpu::Device, size: u64, usage: wgpu::BufferUsages, label: &str) -> wgpu::Buffer {
+    device.create_buffer(&wgpu::BufferDescriptor {
         label: Some(label),
-        contents: &bytes,
+        size: size.max(4),
         usage,
+        mapped_at_creation: false,
     })
+}
+
+fn write_bytes(queue: &wgpu::Queue, buffer: &wgpu::Buffer, bytes: &[u8]) {
+    if bytes.is_empty() {
+        return;
+    }
+    let mut storage;
+    let data = if bytes.len().is_multiple_of(4) {
+        bytes
+    } else {
+        storage = bytes.to_vec();
+        storage.resize(bytes.len().div_ceil(4) * 4, 0);
+        &storage
+    };
+    queue.write_buffer(buffer, 0, data);
+}
+
+fn write_pod<T: bytemuck::Pod>(queue: &wgpu::Queue, buffer: &wgpu::Buffer, value: &T) {
+    write_bytes(queue, buffer, bytemuck::bytes_of(value));
 }
 
 #[repr(C)]
@@ -159,25 +177,155 @@ struct EncodeParams {
     src_rgba: u32,
 }
 
+struct PlaneGpu {
+    coeff: wgpu::Buffer,
+    valid: wgpu::Buffer,
+    plane: wgpu::Buffer,
+    ubo: wgpu::Buffer,
+    bind: wgpu::BindGroup,
+    blocks_x: u32,
+    blocks_y: u32,
+}
+
+#[allow(dead_code)]
 pub(crate) struct GpuSession {
     width: u32,
     height: u32,
-    idct_layout: wgpu::BindGroupLayout,
-    color_layout: wgpu::BindGroupLayout,
-    encode_layout: wgpu::BindGroupLayout,
-    idct_pipeline: wgpu::ComputePipeline,
+    y: PlaneGpu,
+    u: PlaneGpu,
+    v: PlaneGpu,
+    decode_tables: wgpu::Buffer,
+    color_ubo: wgpu::Buffer,
+    color_bind: wgpu::BindGroup,
     color_pipeline: wgpu::ComputePipeline,
+    idct_pipeline: wgpu::ComputePipeline,
+    bgra_buf: wgpu::Buffer,
+    textures: Vec<wgpu::Texture>,
+    preview_textures: Vec<wgpu::Texture>,
+    ring: usize,
+    preview_ring: usize,
     color_encode_pipeline: wgpu::ComputePipeline,
     fdct_y_pipeline: wgpu::ComputePipeline,
     fdct_u_pipeline: wgpu::ComputePipeline,
     fdct_v_pipeline: wgpu::ComputePipeline,
     fdct_a_pipeline: wgpu::ComputePipeline,
-    idct_tables: Vec<i32>,
-    encode_tables: Vec<i32>,
-    textures: Vec<wgpu::Texture>,
-    preview_textures: Vec<wgpu::Texture>,
-    ring: usize,
-    preview_ring: usize,
+    src_buf: wgpu::Buffer,
+    enc_ubo: wgpu::Buffer,
+    enc_tables: wgpu::Buffer,
+    yuv: wgpu::Buffer,
+    coeffs: wgpu::Buffer,
+    coeff_read: wgpu::Buffer,
+    enc_bind: wgpu::BindGroup,
+    y_coeff_count: u32,
+    u_coeff_count: u32,
+    a_coeff_count: u32,
+}
+
+fn ubo_entry(binding: u32) -> wgpu::BindGroupLayoutEntry {
+    wgpu::BindGroupLayoutEntry {
+        binding,
+        visibility: wgpu::ShaderStages::COMPUTE,
+        ty: wgpu::BindingType::Buffer {
+            ty: wgpu::BufferBindingType::Uniform,
+            has_dynamic_offset: false,
+            min_binding_size: None,
+        },
+        count: None,
+    }
+}
+
+fn storage_entry(binding: u32, read_only: bool) -> wgpu::BindGroupLayoutEntry {
+    wgpu::BindGroupLayoutEntry {
+        binding,
+        visibility: wgpu::ShaderStages::COMPUTE,
+        ty: wgpu::BindingType::Buffer {
+            ty: wgpu::BufferBindingType::Storage { read_only },
+            has_dynamic_offset: false,
+            min_binding_size: None,
+        },
+        count: None,
+    }
+}
+
+fn bind<'a>(binding: u32, buf: &'a wgpu::Buffer) -> wgpu::BindGroupEntry<'a> {
+    wgpu::BindGroupEntry {
+        binding,
+        resource: buf.as_entire_binding(),
+    }
+}
+
+fn compute_pipeline(
+    device: &wgpu::Device,
+    layout: &wgpu::PipelineLayout,
+    module: &wgpu::ShaderModule,
+    entry: &str,
+    label: &str,
+) -> wgpu::ComputePipeline {
+    device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+        label: Some(label),
+        layout: Some(layout),
+        module,
+        entry_point: Some(entry),
+        compilation_options: Default::default(),
+        cache: None,
+    })
+}
+
+fn make_plane(
+    device: &wgpu::Device,
+    layout: &wgpu::BindGroupLayout,
+    tables: &wgpu::Buffer,
+    stride: u32,
+    height: u32,
+    label: &str,
+) -> PlaneGpu {
+    let blocks_x = (stride / 8).max(1);
+    let blocks_y = (height / 8).max(1);
+    let n = (blocks_x * blocks_y) as u64;
+    let coeff = buf(
+        device,
+        n * 64 * 2,
+        wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+        &format!("{label}-coeff"),
+    );
+    let valid = buf(
+        device,
+        n * 4,
+        wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+        &format!("{label}-valid"),
+    );
+    let plane = buf(
+        device,
+        u64::from(stride) * u64::from(height) * 4,
+        wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+        &format!("{label}-plane"),
+    );
+    let ubo = buf(
+        device,
+        32,
+        wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        &format!("{label}-ubo"),
+    );
+    let bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some(&format!("{label}-bg")),
+        layout,
+        entries: &[
+            bind(0, &ubo),
+            bind(1, tables),
+            bind(2, &coeff),
+            bind(3, &valid),
+            bind(4, &plane),
+        ],
+    });
+    PlaneGpu {
+        coeff,
+        valid,
+        plane,
+        ubo,
+        bind,
+        blocks_x,
+        blocks_y,
+    }
 }
 
 impl GpuSession {
@@ -248,77 +396,144 @@ impl GpuSession {
             push_constant_ranges: &[],
         });
 
-        let idct_pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-            label: Some("vmx-idct-pipe"),
-            layout: Some(&idct_pl),
-            module: &idct_mod,
-            entry_point: Some("main"),
-            compilation_options: Default::default(),
-            cache: None,
+        let idct_pipeline = compute_pipeline(device, &idct_pl, &idct_mod, "main", "vmx-idct-pipe");
+        let color_pipeline =
+            compute_pipeline(device, &color_pl, &color_mod, "main", "vmx-color-pipe");
+        let color_encode_pipeline = compute_pipeline(
+            device,
+            &encode_pl,
+            &encode_mod,
+            "color_main",
+            "vmx-enc-color",
+        );
+        let fdct_y_pipeline =
+            compute_pipeline(device, &encode_pl, &encode_mod, "fdct_y", "vmx-fdct-y");
+        let fdct_u_pipeline =
+            compute_pipeline(device, &encode_pl, &encode_mod, "fdct_u", "vmx-fdct-u");
+        let fdct_v_pipeline =
+            compute_pipeline(device, &encode_pl, &encode_mod, "fdct_v", "vmx-fdct-v");
+        let fdct_a_pipeline =
+            compute_pipeline(device, &encode_pl, &encode_mod, "fdct_a", "vmx-fdct-a");
+
+        let decode_tables = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("idct-tables"),
+            size: 320 * 4,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: true,
         });
-        let color_pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-            label: Some("vmx-color-pipe"),
-            layout: Some(&color_pl),
-            module: &color_mod,
-            entry_point: Some("main"),
-            compilation_options: Default::default(),
-            cache: None,
-        });
-        let color_encode_pipeline =
-            device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-                label: Some("vmx-enc-color"),
-                layout: Some(&encode_pl),
-                module: &encode_mod,
-                entry_point: Some("color_main"),
-                compilation_options: Default::default(),
-                cache: None,
-            });
-        let fdct_y_pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-            label: Some("vmx-fdct-y"),
-            layout: Some(&encode_pl),
-            module: &encode_mod,
-            entry_point: Some("fdct_y"),
-            compilation_options: Default::default(),
-            cache: None,
-        });
-        let fdct_u_pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-            label: Some("vmx-fdct-u"),
-            layout: Some(&encode_pl),
-            module: &encode_mod,
-            entry_point: Some("fdct_u"),
-            compilation_options: Default::default(),
-            cache: None,
-        });
-        let fdct_v_pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-            label: Some("vmx-fdct-v"),
-            layout: Some(&encode_pl),
-            module: &encode_mod,
-            entry_point: Some("fdct_v"),
-            compilation_options: Default::default(),
-            cache: None,
-        });
-        let fdct_a_pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-            label: Some("vmx-fdct-a"),
-            layout: Some(&encode_pl),
-            module: &encode_mod,
-            entry_point: Some("fdct_a"),
-            compilation_options: Default::default(),
-            cache: None,
+        {
+            let mut data = decode_tables.slice(..).get_mapped_range_mut();
+            let mut tables = Vec::with_capacity(320);
+            for row in IDCT_ROW_TABLES {
+                tables.extend(row.iter().map(|&v| i32::from(v)));
+            }
+            tables.resize(320, 0);
+            data.copy_from_slice(bytemuck::cast_slice(&tables));
+        }
+        decode_tables.unmap();
+        let ys = y_stride(width);
+        let us = uv_stride(width);
+        let ah = aligned_height(height);
+        let y = make_plane(device, &idct_layout, &decode_tables, ys, ah, "y");
+        let u = make_plane(device, &idct_layout, &decode_tables, us, ah, "u");
+        let v = make_plane(device, &idct_layout, &decode_tables, us, ah, "v");
+
+        let dst_stride = padded_bpr(width) / 4;
+        let bgra_buf = buf(
+            device,
+            u64::from(dst_stride) * u64::from(height.max(preview_h)) * 4,
+            wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+            "bgra-out",
+        );
+        let color_ubo = buf(
+            device,
+            48,
+            wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            "color-ubo",
+        );
+        let color_bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("color-bg"),
+            layout: &color_layout,
+            entries: &[
+                bind(0, &color_ubo),
+                bind(1, &y.plane),
+                bind(2, &u.plane),
+                bind(3, &v.plane),
+                bind(4, &bgra_buf),
+            ],
         });
 
-        let mut idct_tables = Vec::with_capacity(384);
-        idct_tables.extend(ZIGZAG_INV.iter().map(|&v| i32::from(v)));
-        for row in IDCT_ROW_TABLES {
-            idct_tables.extend(row.iter().map(|&v| i32::from(v)));
-        }
-        // decode_matrix appended per dispatch (64 i32) — reserve space in comments only
+        let y_bx = ys / 8;
+        let y_by = ah / 8;
+        let u_bx = us / 8;
+        let u_by = ah / 8;
+        let y_coeff_count = y_bx * y_by * 64;
+        let u_coeff_count = u_bx * u_by * 64;
+        let a_coeff_count = y_coeff_count;
+        let coeff_i16 = y_coeff_count + u_coeff_count * 2 + a_coeff_count;
+        let y_len = ys * ah;
+        let u_len = us * ah;
+        let v_len = us * ah;
+        let a_len = y_len;
 
-        let mut encode_tables = Vec::with_capacity(384);
-        for t in [&FTAB1_128, &FTAB2_128, &FTAB3_128, &FTAB4_128] {
-            encode_tables.extend(t.iter().map(|&v| i32::from(v)));
+        let src_buf = buf(
+            device,
+            u64::from(padded_bpr(width)) * u64::from(height),
+            wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::STORAGE,
+            "enc-src",
+        );
+        let enc_ubo = buf(
+            device,
+            112,
+            wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            "enc-ubo",
+        );
+        let enc_tables = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("enc-tables"),
+            size: 384 * 4,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: true,
+        });
+        {
+            let mut data = enc_tables.slice(..).get_mapped_range_mut();
+            let mut tables = Vec::with_capacity(384);
+            for t in [&FTAB1_128, &FTAB2_128, &FTAB3_128, &FTAB4_128] {
+                tables.extend(t.iter().map(|&v| i32::from(v)));
+            }
+            tables.extend(ZIGZAG_INV.iter().map(|&v| i32::from(v)));
+            tables.resize(384, 0);
+            data.copy_from_slice(bytemuck::cast_slice(&tables));
         }
-        encode_tables.extend(ZIGZAG_INV.iter().map(|&v| i32::from(v)));
-        // encode_matrix appended per dispatch (192 u32 as i32)
+        enc_tables.unmap();
+        let yuv = buf(
+            device,
+            u64::from(y_len + u_len + v_len + a_len) * 4,
+            wgpu::BufferUsages::STORAGE,
+            "yuv",
+        );
+        let coeffs = buf(
+            device,
+            u64::from(coeff_i16) * 2,
+            wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+            "coeffs",
+        );
+        let coeff_read = buf(
+            device,
+            u64::from(coeff_i16) * 2,
+            wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+            "coeff-read",
+        );
+        let enc_bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("enc-bg"),
+            layout: &encode_layout,
+            entries: &[
+                bind(0, &enc_ubo),
+                bind(1, &src_buf),
+                bind(2, &enc_tables),
+                bind(3, &yuv),
+                bind(4, &coeffs),
+            ],
+        });
 
         let textures = (0..RING)
             .map(|_| make_bgra_texture(device, width, height))
@@ -330,49 +545,35 @@ impl GpuSession {
         Self {
             width,
             height,
-            idct_layout,
-            color_layout,
-            encode_layout,
-            idct_pipeline,
+            y,
+            u,
+            v,
+            decode_tables,
+            color_ubo,
+            color_bind,
             color_pipeline,
+            idct_pipeline,
+            bgra_buf,
+            textures,
+            preview_textures,
+            ring: 0,
+            preview_ring: 0,
             color_encode_pipeline,
             fdct_y_pipeline,
             fdct_u_pipeline,
             fdct_v_pipeline,
             fdct_a_pipeline,
-            idct_tables,
-            encode_tables,
-            textures,
-            preview_textures,
-            ring: 0,
-            preview_ring: 0,
+            src_buf,
+            enc_ubo,
+            enc_tables,
+            yuv,
+            coeffs,
+            coeff_read,
+            enc_bind,
+            y_coeff_count,
+            u_coeff_count,
+            a_coeff_count,
         }
-    }
-}
-
-fn ubo_entry(binding: u32) -> wgpu::BindGroupLayoutEntry {
-    wgpu::BindGroupLayoutEntry {
-        binding,
-        visibility: wgpu::ShaderStages::COMPUTE,
-        ty: wgpu::BindingType::Buffer {
-            ty: wgpu::BufferBindingType::Uniform,
-            has_dynamic_offset: false,
-            min_binding_size: None,
-        },
-        count: None,
-    }
-}
-
-fn storage_entry(binding: u32, read_only: bool) -> wgpu::BindGroupLayoutEntry {
-    wgpu::BindGroupLayoutEntry {
-        binding,
-        visibility: wgpu::ShaderStages::COMPUTE,
-        ty: wgpu::BindingType::Buffer {
-            ty: wgpu::BufferBindingType::Storage { read_only },
-            has_dynamic_offset: false,
-            min_binding_size: None,
-        },
-        count: None,
     }
 }
 
@@ -445,18 +646,15 @@ impl Codec {
             self.planes.stride[2],
         ];
         let packs = decode_slices_coeffs(&mut self.slices, strides, self.dc_shift);
-        let y_slices: Vec<_> = packs.iter().map(|p| p[0].clone()).collect();
-        let u_slices: Vec<_> = packs.iter().map(|p| p[1].clone()).collect();
-        let v_slices: Vec<_> = packs.iter().map(|p| p[2].clone()).collect();
-        let y = PlanePack::from_slice_blocks(strides[0], 128, &y_slices);
-        let u = PlanePack::from_slice_blocks(strides[1], 0, &u_slices);
-        let v = PlanePack::from_slice_blocks(strides[2], 0, &v_slices);
+        let y = DensePlane::from_packs(&packs, 0, strides[0], 128);
+        let u = DensePlane::from_packs(&packs, 1, strides[1], 0);
+        let v = DensePlane::from_packs(&packs, 2, strides[2], 0);
         let idx = self.decode_matrix_idx;
         let matrix: Vec<i32> = self.decode_presets[idx]
             .iter()
             .map(|&m| i32::from(m as i16))
             .collect();
-        self.dispatch_decode(device, queue, &y, &u, &v, &matrix, false)
+        self.dispatch_decode(device, queue, &y, &u, &v, &matrix)
     }
 
     /// Decode a 1/8 preview into a BGRA texture on `device`.
@@ -475,8 +673,8 @@ impl Codec {
         let y = plane_bytes_to_u32(&self.planes.data[0], y_stride, ph);
         let u = plane_bytes_to_u32(&self.planes.data[1], u_stride, ph);
         let v = plane_bytes_to_u32(&self.planes.data[2], v_stride, ph);
-        self.dispatch_color_only(
-            device, queue, &y, &u, &v, y_stride, u_stride, v_stride, pw, ph, true,
+        self.dispatch_preview(
+            device, queue, &y, &u, &v, y_stride, u_stride, v_stride, pw, ph,
         )
     }
 
@@ -513,36 +711,141 @@ impl Codec {
         self.dispatch_encode(device, queue, texture)
     }
 
+    fn upload_idct_tables(&self, queue: &wgpu::Queue, matrix: &[i32]) {
+        let gpu = self.gpu.as_ref().expect("gpu");
+        let mut m = [0i32; 64];
+        for (dst, src) in m.iter_mut().zip(matrix.iter()) {
+            *dst = *src;
+        }
+        queue.write_buffer(&gpu.decode_tables, 256 * 4, bytemuck::bytes_of(&m));
+    }
+
+    fn upload_plane(queue: &wgpu::Queue, plane: &PlaneGpu, pack: &DensePlane) {
+        let params = DecodeParams {
+            blocks_x: pack.blocks_x.max(1),
+            blocks_y: pack.blocks_y.max(1),
+            stride: pack.stride,
+            add_val: pack.add_val,
+            block_count: pack.block_count().max(1),
+            _pad0: 0,
+            _pad1: 0,
+            _pad2: 0,
+        };
+        write_pod(queue, &plane.ubo, &params);
+        write_bytes(queue, &plane.coeff, bytemuck::cast_slice(&pack.coeffs));
+        write_bytes(queue, &plane.valid, bytemuck::cast_slice(&pack.valid));
+    }
+
     fn dispatch_decode(
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
-        y: &PlanePack,
-        u: &PlanePack,
-        v: &PlanePack,
+        y: &DensePlane,
+        u: &DensePlane,
+        v: &DensePlane,
         matrix: &[i32],
-        preview: bool,
     ) -> Result<GpuFrame> {
+        self.upload_idct_tables(queue, matrix);
         let gpu = self.gpu.as_mut().ok_or_else(|| gpu_err("gpu session"))?;
-        let y_out = idct_plane(device, queue, gpu, y, matrix)?;
-        let u_out = idct_plane(device, queue, gpu, u, matrix)?;
-        let v_out = idct_plane(device, queue, gpu, v, matrix)?;
-        let w = if preview {
-            self.preview_size.width as u32
-        } else {
-            self.size.width as u32
-        };
-        let h = if preview {
-            self.preview_size.height as u32
-        } else {
-            self.size.height as u32
-        };
-        self.dispatch_color_from_planes(
-            device, queue, &y_out, &u_out, &v_out, y.stride, u.stride, v.stride, w, h, preview,
-        )
+        Self::upload_plane(queue, &gpu.y, y);
+        Self::upload_plane(queue, &gpu.u, u);
+        Self::upload_plane(queue, &gpu.v, v);
+
+        let w = self.size.width as u32;
+        let h = self.size.height as u32;
+        let mut cp = yuv_table(self.color_space, self.size.height);
+        cp.width = w;
+        cp.height = h;
+        cp.y_stride = y.stride;
+        cp.u_stride = u.stride;
+        cp.v_stride = v.stride;
+        cp.dst_stride = padded_bpr(w) / 4;
+        write_pod(queue, &gpu.color_ubo, &cp);
+
+        gpu.ring = (gpu.ring + 1) % RING;
+        let tex = gpu.textures[gpu.ring].clone();
+
+        let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("vmx-decode"),
+        });
+        {
+            let mut pass = enc.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("idct"),
+                timestamp_writes: None,
+            });
+            pass.set_pipeline(&gpu.idct_pipeline);
+            pass.set_bind_group(0, &gpu.y.bind, &[]);
+            pass.dispatch_workgroups(
+                gpu.y
+                    .blocks_x
+                    .saturating_mul(gpu.y.blocks_y)
+                    .div_ceil(8)
+                    .max(1),
+                1,
+                1,
+            );
+            pass.set_bind_group(0, &gpu.u.bind, &[]);
+            pass.dispatch_workgroups(
+                gpu.u
+                    .blocks_x
+                    .saturating_mul(gpu.u.blocks_y)
+                    .div_ceil(8)
+                    .max(1),
+                1,
+                1,
+            );
+            pass.set_bind_group(0, &gpu.v.bind, &[]);
+            pass.dispatch_workgroups(
+                gpu.v
+                    .blocks_x
+                    .saturating_mul(gpu.v.blocks_y)
+                    .div_ceil(8)
+                    .max(1),
+                1,
+                1,
+            );
+        }
+        {
+            let mut pass = enc.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("color"),
+                timestamp_writes: None,
+            });
+            pass.set_pipeline(&gpu.color_pipeline);
+            pass.set_bind_group(0, &gpu.color_bind, &[]);
+            pass.dispatch_workgroups((w / 2).div_ceil(8).max(1), h.div_ceil(8).max(1), 1);
+        }
+        enc.copy_buffer_to_texture(
+            wgpu::TexelCopyBufferInfo {
+                buffer: &gpu.bgra_buf,
+                layout: wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(padded_bpr(w)),
+                    rows_per_image: Some(h),
+                },
+            },
+            wgpu::TexelCopyTextureInfo {
+                texture: &tex,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::Extent3d {
+                width: w,
+                height: h,
+                depth_or_array_layers: 1,
+            },
+        );
+        let index = queue.submit(Some(enc.finish()));
+        wait(device, &index);
+        Ok(GpuFrame {
+            texture: tex,
+            width: w,
+            height: h,
+            submission_index: index,
+        })
     }
 
-    fn dispatch_color_only(
+    fn dispatch_preview(
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
@@ -554,104 +857,25 @@ impl Codec {
         v_stride: u32,
         w: u32,
         h: u32,
-        preview: bool,
-    ) -> Result<GpuFrame> {
-        let y_buf = make_buffer(
-            device,
-            bytemuck::cast_slice(y),
-            wgpu::BufferUsages::STORAGE,
-            "y",
-        );
-        let u_buf = make_buffer(
-            device,
-            bytemuck::cast_slice(u),
-            wgpu::BufferUsages::STORAGE,
-            "u",
-        );
-        let v_buf = make_buffer(
-            device,
-            bytemuck::cast_slice(v),
-            wgpu::BufferUsages::STORAGE,
-            "v",
-        );
-        self.dispatch_color_from_planes(
-            device, queue, &y_buf, &u_buf, &v_buf, y_stride, u_stride, v_stride, w, h, preview,
-        )
-    }
-
-    fn dispatch_color_from_planes(
-        &mut self,
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
-        y_buf: &wgpu::Buffer,
-        u_buf: &wgpu::Buffer,
-        v_buf: &wgpu::Buffer,
-        y_stride: u32,
-        u_stride: u32,
-        v_stride: u32,
-        w: u32,
-        h: u32,
-        preview: bool,
     ) -> Result<GpuFrame> {
         let gpu = self.gpu.as_mut().ok_or_else(|| gpu_err("gpu session"))?;
-        let dst_stride = padded_bpr(w) / 4;
+        write_bytes(queue, &gpu.y.plane, bytemuck::cast_slice(y));
+        write_bytes(queue, &gpu.u.plane, bytemuck::cast_slice(u));
+        write_bytes(queue, &gpu.v.plane, bytemuck::cast_slice(v));
         let mut cp = yuv_table(self.color_space, self.size.height);
         cp.width = w;
         cp.height = h;
         cp.y_stride = y_stride;
         cp.u_stride = u_stride;
         cp.v_stride = v_stride;
-        cp.dst_stride = dst_stride;
-        let ubo = make_buffer(
-            device,
-            bytemuck::bytes_of(&cp),
-            wgpu::BufferUsages::UNIFORM,
-            "color-ubo",
-        );
-        let bgra_size = (dst_stride * h).max(1) * 4;
-        let bgra_buf = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("bgra-out"),
-            size: bgra_size as u64,
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
-            mapped_at_creation: false,
-        });
-        let bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("color-bg"),
-            layout: &gpu.color_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: ubo.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: y_buf.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: u_buf.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 3,
-                    resource: v_buf.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 4,
-                    resource: bgra_buf.as_entire_binding(),
-                },
-            ],
-        });
+        cp.dst_stride = padded_bpr(w) / 4;
+        write_pod(queue, &gpu.color_ubo, &cp);
 
-        let tex = if preview {
-            gpu.preview_ring = (gpu.preview_ring + 1) % RING;
-            gpu.preview_textures[gpu.preview_ring].clone()
-        } else {
-            gpu.ring = (gpu.ring + 1) % RING;
-            gpu.textures[gpu.ring].clone()
-        };
+        gpu.preview_ring = (gpu.preview_ring + 1) % RING;
+        let tex = gpu.preview_textures[gpu.preview_ring].clone();
 
         let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("vmx-color"),
+            label: Some("vmx-preview"),
         });
         {
             let mut pass = enc.begin_compute_pass(&wgpu::ComputePassDescriptor {
@@ -659,12 +883,12 @@ impl Codec {
                 timestamp_writes: None,
             });
             pass.set_pipeline(&gpu.color_pipeline);
-            pass.set_bind_group(0, &bg, &[]);
+            pass.set_bind_group(0, &gpu.color_bind, &[]);
             pass.dispatch_workgroups((w / 2).div_ceil(8).max(1), h.div_ceil(8).max(1), 1);
         }
         enc.copy_buffer_to_texture(
             wgpu::TexelCopyBufferInfo {
-                buffer: &bgra_buf,
+                buffer: &gpu.bgra_buf,
                 layout: wgpu::TexelCopyBufferLayout {
                     offset: 0,
                     bytes_per_row: Some(padded_bpr(w)),
@@ -702,44 +926,10 @@ impl Codec {
         let w = self.size.width as u32;
         let h = self.size.height as u32;
         let src_bpr = padded_bpr(w);
-        let src_size = src_bpr * h;
-        let src_buf = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("enc-src"),
-            size: src_size as u64,
-            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::STORAGE,
-            mapped_at_creation: false,
-        });
-        let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("tex-download"),
-        });
-        enc.copy_texture_to_buffer(
-            wgpu::TexelCopyTextureInfo {
-                texture,
-                mip_level: 0,
-                origin: wgpu::Origin3d::ZERO,
-                aspect: wgpu::TextureAspect::All,
-            },
-            wgpu::TexelCopyBufferInfo {
-                buffer: &src_buf,
-                layout: wgpu::TexelCopyBufferLayout {
-                    offset: 0,
-                    bytes_per_row: Some(src_bpr),
-                    rows_per_image: Some(h),
-                },
-            },
-            wgpu::Extent3d {
-                width: w,
-                height: h,
-                depth_or_array_layers: 1,
-            },
-        );
-        queue.submit(Some(enc.finish()));
-        let _ = device.poll(wgpu::PollType::Wait);
-
         let y_stride = self.planes.stride[0] as u32;
         let u_stride = self.planes.stride[1] as u32;
         let v_stride = self.planes.stride[2] as u32;
-        let aligned_h = crate::types::align_up(self.size.height, 16) as u32;
+        let aligned_h = align_up(self.size.height, 16) as u32;
         let y_bx = y_stride / 8;
         let y_by = aligned_h / 8;
         let u_bx = u_stride / 8;
@@ -754,16 +944,7 @@ impl Codec {
         let y_len = y_stride * aligned_h;
         let u_len = u_stride * aligned_h;
         let v_len = v_stride * aligned_h;
-        let a_len = y_len;
-        let u_plane_off = y_len;
-        let v_plane_off = y_len + u_len;
-        let a_plane_off = y_len + u_len + v_len;
-        let y_coeff_count = y_bx * y_by * 64;
-        let u_coeff_count = u_bx * u_by * 64;
-        let a_coeff_count = y_coeff_count;
-        let u_coeff_off = y_coeff_count;
-        let v_coeff_off = y_coeff_count + u_coeff_count;
-        let a_coeff_off = y_coeff_count + u_coeff_count * 2;
+        let gpu = self.gpu.as_ref().ok_or_else(|| gpu_err("gpu session"))?;
         let ep = EncodeParams {
             width: w,
             height: h,
@@ -777,10 +958,10 @@ impl Codec {
             u_blocks_y: u_by,
             add_y: -128,
             add_uv: 0,
-            u_plane_off,
-            v_plane_off,
-            u_coeff_off,
-            v_coeff_off,
+            u_plane_off: y_len,
+            v_plane_off: y_len + u_len,
+            u_coeff_off: gpu.y_coeff_count,
+            v_coeff_off: gpu.y_coeff_count + gpu.u_coeff_count,
             u_r: i32::from(rgb[1].r),
             u_g: i32::from(rgb[1].g),
             u_b: i32::from(rgb[1].b),
@@ -790,63 +971,53 @@ impl Codec {
             y_r: i32::from(rgb[0].r),
             y_g: i32::from(rgb[0].g),
             y_b: i32::from(rgb[0].b),
-            a_plane_off,
-            a_coeff_off,
+            a_plane_off: y_len + u_len + v_len,
+            a_coeff_off: gpu.y_coeff_count + gpu.u_coeff_count * 2,
             src_rgba: u32::from(matches!(
                 texture.format(),
                 wgpu::TextureFormat::Rgba8Unorm | wgpu::TextureFormat::Rgba8UnormSrgb
             )),
         };
-        let gpu = self.gpu.as_ref().ok_or_else(|| gpu_err("gpu session"))?;
-        let ubo = make_buffer(
-            device,
-            bytemuck::bytes_of(&ep),
-            wgpu::BufferUsages::UNIFORM,
-            "enc-ubo",
-        );
+        write_pod(queue, &gpu.enc_ubo, &ep);
+
         let idx = self.decode_matrix_idx;
-        let mut tables = gpu.encode_tables.clone();
-        tables.extend(self.encode_presets[idx].iter().map(|&v| i32::from(v)));
-        let tables_buf = make_buffer(
-            device,
-            bytemuck::cast_slice(&tables),
-            wgpu::BufferUsages::STORAGE,
-            "enc-tables",
-        );
-        let yuv = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("yuv"),
-            size: ((y_len + u_len + v_len + a_len) * 4) as u64,
-            usage: wgpu::BufferUsages::STORAGE,
-            mapped_at_creation: false,
-        });
-        let coeff_total = y_coeff_count + u_coeff_count * 2 + a_coeff_count;
-        let coeffs = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("coeffs"),
-            size: (coeff_total * 4) as u64,
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
-            mapped_at_creation: false,
-        });
-        let bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("enc-bg"),
-            layout: &gpu.encode_layout,
-            entries: &[
-                bind(0, &ubo),
-                bind(1, &src_buf),
-                bind(2, &tables_buf),
-                bind(3, &yuv),
-                bind(4, &coeffs),
-            ],
-        });
+        let mut matrix = [0i32; 192];
+        for (dst, &src) in matrix.iter_mut().zip(self.encode_presets[idx].iter()) {
+            *dst = i32::from(src);
+        }
+        queue.write_buffer(&gpu.enc_tables, 192 * 4, bytemuck::bytes_of(&matrix));
+
         let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("encode"),
+            label: Some("vmx-encode"),
         });
+        enc.copy_texture_to_buffer(
+            wgpu::TexelCopyTextureInfo {
+                texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::TexelCopyBufferInfo {
+                buffer: &gpu.src_buf,
+                layout: wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(src_bpr),
+                    rows_per_image: Some(h),
+                },
+            },
+            wgpu::Extent3d {
+                width: w,
+                height: h,
+                depth_or_array_layers: 1,
+            },
+        );
         {
             let mut pass = enc.begin_compute_pass(&wgpu::ComputePassDescriptor {
                 label: Some("enc-color"),
                 timestamp_writes: None,
             });
             pass.set_pipeline(&gpu.color_encode_pipeline);
-            pass.set_bind_group(0, &bg, &[]);
+            pass.set_bind_group(0, &gpu.enc_bind, &[]);
             pass.dispatch_workgroups((w / 2).div_ceil(8).max(1), h.div_ceil(8).max(1), 1);
         }
         {
@@ -855,7 +1026,7 @@ impl Codec {
                 timestamp_writes: None,
             });
             pass.set_pipeline(&gpu.fdct_y_pipeline);
-            pass.set_bind_group(0, &bg, &[]);
+            pass.set_bind_group(0, &gpu.enc_bind, &[]);
             pass.dispatch_workgroups((y_bx * y_by).div_ceil(64).max(1), 1, 1);
             pass.set_pipeline(&gpu.fdct_u_pipeline);
             pass.dispatch_workgroups((u_bx * u_by).div_ceil(64).max(1), 1, 1);
@@ -864,39 +1035,16 @@ impl Codec {
             pass.set_pipeline(&gpu.fdct_a_pipeline);
             pass.dispatch_workgroups((y_bx * y_by).div_ceil(64).max(1), 1, 1);
         }
-        let y_read = staging(device, (y_coeff_count * 4) as u64);
-        let u_read = staging(device, (u_coeff_count * 4) as u64);
-        let v_read = staging(device, (u_coeff_count * 4) as u64);
-        let a_read = staging(device, (a_coeff_count * 4) as u64);
-        enc.copy_buffer_to_buffer(&coeffs, 0, &y_read, 0, (y_coeff_count * 4) as u64);
-        enc.copy_buffer_to_buffer(
-            &coeffs,
-            (u_coeff_off * 4) as u64,
-            &u_read,
-            0,
-            (u_coeff_count * 4) as u64,
-        );
-        enc.copy_buffer_to_buffer(
-            &coeffs,
-            (v_coeff_off * 4) as u64,
-            &v_read,
-            0,
-            (u_coeff_count * 4) as u64,
-        );
-        enc.copy_buffer_to_buffer(
-            &coeffs,
-            (a_coeff_off * 4) as u64,
-            &a_read,
-            0,
-            (a_coeff_count * 4) as u64,
-        );
+        let bytes = u64::from(gpu.y_coeff_count + gpu.u_coeff_count * 2 + gpu.a_coeff_count) * 2;
+        enc.copy_buffer_to_buffer(&gpu.coeffs, 0, &gpu.coeff_read, 0, bytes.max(4));
         let index = queue.submit(Some(enc.finish()));
         wait(device, &index);
 
-        let y_blocks = map_i16_blocks(device, &y_read, y_coeff_count as usize);
-        let u_blocks = map_i16_blocks(device, &u_read, u_coeff_count as usize);
-        let v_blocks = map_i16_blocks(device, &v_read, u_coeff_count as usize);
-        let a_blocks = map_i16_blocks(device, &a_read, a_coeff_count as usize);
+        let y_n = gpu.y_coeff_count as usize;
+        let u_n = gpu.u_coeff_count as usize;
+        let a_n = gpu.a_coeff_count as usize;
+        let [y_blocks, u_blocks, v_blocks, a_blocks] =
+            map_packed_planes(device, &gpu.coeff_read, y_n, u_n, a_n);
         encode_slices_from_coeffs(
             &mut self.slices,
             [
@@ -915,42 +1063,6 @@ impl Codec {
     }
 }
 
-fn bind<'a>(binding: u32, buf: &'a wgpu::Buffer) -> wgpu::BindGroupEntry<'a> {
-    wgpu::BindGroupEntry {
-        binding,
-        resource: buf.as_entire_binding(),
-    }
-}
-
-fn staging(device: &wgpu::Device, size: u64) -> wgpu::Buffer {
-    device.create_buffer(&wgpu::BufferDescriptor {
-        label: Some("staging"),
-        size: size.max(4),
-        usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
-        mapped_at_creation: false,
-    })
-}
-
-fn map_i16_blocks(device: &wgpu::Device, buf: &wgpu::Buffer, i32_count: usize) -> Vec<[i16; 64]> {
-    let slice = buf.slice(..);
-    slice.map_async(wgpu::MapMode::Read, |_| {});
-    let _ = device.poll(wgpu::PollType::Wait);
-    let data = slice.get_mapped_range();
-    let vals: &[i32] = bytemuck::cast_slice(&data);
-    let n = i32_count / 64;
-    let mut out = Vec::with_capacity(n);
-    for b in 0..n {
-        let mut block = [0i16; 64];
-        for i in 0..64 {
-            block[i] = vals[b * 64 + i] as i16;
-        }
-        out.push(block);
-    }
-    drop(data);
-    buf.unmap();
-    out
-}
-
 fn plane_bytes_to_u32(data: &[u8], stride: u32, height: u32) -> Vec<u32> {
     let mut out = vec![0u32; (stride * height) as usize];
     let n = out.len().min(data.len());
@@ -960,100 +1072,36 @@ fn plane_bytes_to_u32(data: &[u8], stride: u32, height: u32) -> Vec<u32> {
     out
 }
 
-fn idct_plane(
+fn map_packed_planes(
     device: &wgpu::Device,
-    queue: &wgpu::Queue,
-    gpu: &GpuSession,
-    pack: &PlanePack,
-    matrix: &[i32],
-) -> Result<wgpu::Buffer> {
-    let params = DecodeParams {
-        blocks_x: pack.blocks_x.max(1),
-        blocks_y: pack.blocks_y.max(1),
-        stride: pack.stride,
-        add_val: pack.add_val,
-        block_count: pack.block_count().max(1),
-        _pad0: 0,
-        _pad1: 0,
-        _pad2: 0,
+    buf: &wgpu::Buffer,
+    y_n: usize,
+    u_n: usize,
+    a_n: usize,
+) -> [Vec<[i16; 64]>; 4] {
+    let slice = buf.slice(..);
+    slice.map_async(wgpu::MapMode::Read, |_| {});
+    let _ = device.poll(wgpu::PollType::Wait);
+    let data = slice.get_mapped_range();
+    let vals: &[i16] = bytemuck::cast_slice(&data);
+    let unpack = |off: usize, count: usize| -> Vec<[i16; 64]> {
+        let n = count / 64;
+        let mut out = Vec::with_capacity(n);
+        for b in 0..n {
+            let mut block = [0i16; 64];
+            let src = off + b * 64;
+            block.copy_from_slice(&vals[src..src + 64]);
+            out.push(block);
+        }
+        out
     };
-    let ubo = make_buffer(
-        device,
-        bytemuck::bytes_of(&params),
-        wgpu::BufferUsages::UNIFORM,
-        "idct-ubo",
-    );
-    let mut tables = gpu.idct_tables.clone();
-    tables.extend(matrix.iter().copied());
-    let tables_buf = make_buffer(
-        device,
-        bytemuck::cast_slice(&tables),
-        wgpu::BufferUsages::STORAGE,
-        "idct-tables",
-    );
-    let n = pack.dc.len().max(1);
-    let mut headers = vec![[0u32; 4]; n];
-    for (i, header) in headers.iter_mut().enumerate().take(pack.dc.len()) {
-        *header = [
-            pack.dc[i] as u32,
-            pack.valid.get(i).copied().unwrap_or(0),
-            pack.nnz.get(i).copied().unwrap_or(0),
-            pack.ac_off.get(i).copied().unwrap_or(0),
-        ];
-    }
-    let headers_buf = make_buffer(
-        device,
-        bytemuck::cast_slice(&headers),
-        wgpu::BufferUsages::STORAGE,
-        "headers",
-    );
-    let mut packed = Vec::with_capacity(pack.ac_idx.len().max(1) * 2);
-    for i in 0..pack.ac_idx.len() {
-        packed.push(pack.ac_idx[i] as i32);
-        packed.push(*pack.ac_val.get(i).unwrap_or(&0));
-    }
-    if packed.is_empty() {
-        packed.extend_from_slice(&[0, 0]);
-    }
-    let ac_buf = make_buffer(
-        device,
-        bytemuck::cast_slice(&packed),
-        wgpu::BufferUsages::STORAGE,
-        "packed-ac",
-    );
-    let plane_len = (pack.stride * pack.blocks_y.max(1) * 8).max(1);
-    let plane_out = device.create_buffer(&wgpu::BufferDescriptor {
-        label: Some("plane-out"),
-        size: (plane_len * 4) as u64,
-        usage: wgpu::BufferUsages::STORAGE,
-        mapped_at_creation: false,
-    });
-    let bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
-        label: Some("idct-bg"),
-        layout: &gpu.idct_layout,
-        entries: &[
-            bind(0, &ubo),
-            bind(1, &tables_buf),
-            bind(2, &headers_buf),
-            bind(3, &ac_buf),
-            bind(4, &plane_out),
-        ],
-    });
-    let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-        label: Some("idct"),
-    });
-    {
-        let mut pass = enc.begin_compute_pass(&wgpu::ComputePassDescriptor {
-            label: Some("idct"),
-            timestamp_writes: None,
-        });
-        pass.set_pipeline(&gpu.idct_pipeline);
-        pass.set_bind_group(0, &bg, &[]);
-        pass.dispatch_workgroups(params.block_count.div_ceil(64).max(1), 1, 1);
-    }
-    let index = queue.submit(Some(enc.finish()));
-    wait(device, &index);
-    Ok(plane_out)
+    let y = unpack(0, y_n);
+    let u = unpack(y_n, u_n);
+    let v = unpack(y_n + u_n, u_n);
+    let a = unpack(y_n + u_n * 2, a_n);
+    drop(data);
+    buf.unmap();
+    [y, u, v, a]
 }
 
 /// Read a BGRA texture back to tightly packed CPU bytes (tests / bench).

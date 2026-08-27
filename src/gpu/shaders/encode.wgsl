@@ -36,7 +36,7 @@ struct EncodeParams {
 // tables: [0..128) ftab, [128..192) zigzag_inv, [192..384) encode_matrix
 @group(0) @binding(2) var<storage, read> tables: array<i32>;
 @group(0) @binding(3) var<storage, read_write> yuv: array<u32>;
-@group(0) @binding(4) var<storage, read_write> coeffs: array<i32>;
+@group(0) @binding(4) var<storage, read_write> coeffs: array<u32>;
 
 const SHIFT_FRW_COL: i32 = 3;
 const SHIFT_FRW_ROW: i32 = 16;
@@ -244,8 +244,15 @@ fn fdct_quant_zig(plane_off: u32, stride: u32, px: u32, py: u32, add_val: i32, o
             spatial[y * 8u + x] = row_out[x];
         }
     }
+    var zig: array<i32, 64>;
     for (var i: u32 = 0u; i < 64u; i = i + 1u) {
-        coeffs[out_base + zigzag_inv(i)] = spatial_quant(spatial[i], i);
+        zig[zigzag_inv(i)] = spatial_quant(spatial[i], i);
+    }
+    let word_base = out_base >> 1u;
+    for (var w: u32 = 0u; w < 32u; w = w + 1u) {
+        let a = u32(zig[w * 2u]) & 0xFFFFu;
+        let b = u32(zig[w * 2u + 1u]) & 0xFFFFu;
+        coeffs[word_base + w] = a | (b << 16u);
     }
 }
 

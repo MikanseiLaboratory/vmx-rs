@@ -90,20 +90,16 @@ RUSTFLAGS="-C target-cpu=native" cargo build --profile release-fast
 
 ## wgpu texture I/O (`feature = "wgpu"`)
 
-Optional GPU path that **does not create a `wgpu::Instance`**. Callers pass
-their existing `Device` / `Queue`. After `load_from`, `decode_to_texture` /
-`decode_preview_to_texture` produce a `Bgra8Unorm` texture (ready to bind;
-the API waits for GPU completion). `encode_from_texture` accepts `Bgra8Unorm`
-or `Rgba8Unorm` with `COPY_SRC` and is followed by `save_to`.
+Callers pass their existing `Device` / `Queue`. After `load_from`,
+`decode_to_texture` / `decode_preview_to_texture` produce a `Bgra8Unorm`
+texture (the API waits for GPU completion). `encode_from_texture` accepts
+`Bgra8Unorm` or `Rgba8Unorm` with `COPY_SRC` and is followed by `save_to`.
 
-Integer AAN IDCT/FDCT matches the CPU scalar path (8-bit only). Not in scope:
-DX12 NT shared handles, 10/16-bit, alpha as a separate product feature.
+Integer AAN IDCT/FDCT matches the CPU scalar 8-bit path.
 
 ```bash
 cargo test --features wgpu
 ```
-
-Headless tests skip (still pass) when no adapter is present.
 
 ## License
 

@@ -14,16 +14,27 @@ path = "src/lib.rs"
 
 [features]
 default = []
+wgpu = ["dep:wgpu", "dep:bytemuck", "dep:pollster"]
 
 [dependencies]
 thiserror = "2"
 rayon = "1.10"
+wgpu = { version = "26", optional = true, default-features = true }
+bytemuck = { version = "1", optional = true, features = ["derive"] }
+pollster = { version = "0.4", optional = true }
+
+[dev-dependencies]
+pollster = "0.4"
 
 [[example]]
 name = "roundtrip"
 
 [[example]]
 name = "simd_report"
+
+[[example]]
+name = "gpu_bench"
+required-features = ["wgpu"]
 
 [profile.release]
 lto = "thin"

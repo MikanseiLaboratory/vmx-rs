@@ -35,4 +35,7 @@ pub enum VmxError {
     /// Bitstream overread / truncated entropy data.
     #[error("bitstream exhausted")]
     BitstreamExhausted,
+    /// GPU / wgpu path failure (feature `wgpu` only).
+    #[error("gpu error: {0}")]
+    Gpu(String),
 }

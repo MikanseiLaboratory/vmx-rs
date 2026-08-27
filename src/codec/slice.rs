@@ -295,3 +295,161 @@ pub fn decode_slices_fused_bgra(
         _ => pack_chunk(slices),
     }
 }
+
+#[cfg(feature = "wgpu")]
+fn ensure_pack_len(buf: &mut Vec<u8>, len: usize) {
+    if buf.len() != len {
+        buf.resize(len, 0);
+    }
+}
+
+/// Entropy-decode all slices into one packed GPU coefficient buffer (Y then U then V).
+/// Returns `(y_bytes, u_bytes, v_bytes)`.
+#[cfg(feature = "wgpu")]
+pub fn decode_slices_coeffs(
+    slices: &mut [SliceSet],
+    strides: [usize; 3],
+    dc_shift: i32,
+    pack: &mut Vec<u8>,
+) -> (usize, usize, usize) {
+    use crate::gpu::pack::PACK_BYTES;
+    use rayon::prelude::*;
+
+    let n_slices = slices.len();
+    let blocks_per_slice = |stride: usize| (stride / 8) * (SLICE_HEIGHT as usize / 8);
+    let y_bps = blocks_per_slice(strides[0]);
+    let u_bps = blocks_per_slice(strides[1]);
+    let v_bps = blocks_per_slice(strides[2]);
+    let y_len = n_slices * y_bps * PACK_BYTES;
+    let u_len = n_slices * u_bps * PACK_BYTES;
+    let v_len = n_slices * v_bps * PACK_BYTES;
+    ensure_pack_len(pack, y_len + u_len + v_len);
+    let pack_ptr = pack.as_mut_ptr() as usize;
+
+    slices.par_iter_mut().enumerate().for_each(|(i, slice)| {
+        prepare_slice_bitstream(slice);
+        // SAFETY: each slice writes disjoint Y/U/V windows in the concatenated pack.
+        let y_out = unsafe {
+            std::slice::from_raw_parts_mut(
+                (pack_ptr as *mut u8).add(i * y_bps * PACK_BYTES),
+                y_bps * PACK_BYTES,
+            )
+        };
+        let u_out = unsafe {
+            std::slice::from_raw_parts_mut(
+                (pack_ptr as *mut u8).add(y_len + i * u_bps * PACK_BYTES),
+                u_bps * PACK_BYTES,
+            )
+        };
+        let v_out = unsafe {
+            std::slice::from_raw_parts_mut(
+                (pack_ptr as *mut u8).add(y_len + u_len + i * v_bps * PACK_BYTES),
+                v_bps * PACK_BYTES,
+            )
+        };
+        crate::codec::plane::decode_plane_coeffs(
+            0,
+            strides[0],
+            &mut slice.dc,
+            &mut slice.ac,
+            dc_shift,
+            &mut slice.temp_block,
+            y_out,
+        );
+        crate::codec::plane::decode_plane_coeffs(
+            1,
+            strides[1],
+            &mut slice.dc,
+            &mut slice.ac,
+            dc_shift,
+            &mut slice.temp_block,
+            u_out,
+        );
+        crate::codec::plane::decode_plane_coeffs(
+            2,
+            strides[2],
+            &mut slice.dc,
+            &mut slice.ac,
+            dc_shift,
+            &mut slice.temp_block,
+            v_out,
+        );
+    });
+    (y_len, u_len, v_len)
+}
+
+#[cfg(feature = "wgpu")]
+fn i16_as_blocks(vals: &[i16]) -> &[[i16; 64]] {
+    let n = vals.len() / 64;
+    // SAFETY: `vals` is a mapped tightly packed i16 coefficient stream; length is a
+    // multiple of 64 (one zigzag block). Alignment matches `[i16; 64]`.
+    unsafe { std::slice::from_raw_parts(vals.as_ptr().cast::<[i16; 64]>(), n) }
+}
+
+/// Golomb-encode full-frame zigzag blocks from a mapped `[y|u|v|a]` i16 stream.
+#[cfg(feature = "wgpu")]
+pub fn encode_slices_from_coeffs(
+    slices: &mut [SliceSet],
+    strides: [usize; 4],
+    coeffs: &[i16],
+    y_n: usize,
+    u_n: usize,
+    a_n: usize,
+    dc_shift: i32,
+) {
+    use rayon::prelude::*;
+
+    let y_blocks = i16_as_blocks(&coeffs[..y_n]);
+    let u_blocks = i16_as_blocks(&coeffs[y_n..y_n + u_n]);
+    let v_blocks = i16_as_blocks(&coeffs[y_n + u_n..y_n + u_n * 2]);
+    let a_blocks = i16_as_blocks(&coeffs[y_n + u_n * 2..y_n + u_n * 2 + a_n]);
+    let y_bx = strides[0] / 8;
+    let u_bx = strides[1] / 8;
+    let v_bx = strides[2] / 8;
+    let a_bx = strides[3] / 8;
+    let by_per_slice = (SLICE_HEIGHT as usize) / 8;
+
+    slices.par_iter_mut().enumerate().for_each(|(si, slice)| {
+        slice.reset();
+        let y0 = si * by_per_slice * y_bx;
+        let y1 = y0 + by_per_slice * y_bx;
+        let u0 = si * by_per_slice * u_bx;
+        let u1 = u0 + by_per_slice * u_bx;
+        let v0 = si * by_per_slice * v_bx;
+        let v1 = v0 + by_per_slice * v_bx;
+        crate::codec::plane::encode_plane_from_blocks(
+            0,
+            strides[0],
+            &y_blocks[y0.min(y_blocks.len())..y1.min(y_blocks.len())],
+            &mut slice.dc,
+            &mut slice.ac,
+            dc_shift,
+        );
+        crate::codec::plane::encode_plane_from_blocks(
+            1,
+            strides[1],
+            &u_blocks[u0.min(u_blocks.len())..u1.min(u_blocks.len())],
+            &mut slice.dc,
+            &mut slice.ac,
+            dc_shift,
+        );
+        crate::codec::plane::encode_plane_from_blocks(
+            2,
+            strides[2],
+            &v_blocks[v0.min(v_blocks.len())..v1.min(v_blocks.len())],
+            &mut slice.dc,
+            &mut slice.ac,
+            dc_shift,
+        );
+        let a0 = si * by_per_slice * a_bx;
+        let a1 = a0 + by_per_slice * a_bx;
+        crate::codec::plane::encode_plane_from_blocks(
+            3,
+            strides[3],
+            &a_blocks[a0.min(a_blocks.len())..a1.min(a_blocks.len())],
+            &mut slice.dc,
+            &mut slice.ac,
+            dc_shift,
+        );
+    });
+}

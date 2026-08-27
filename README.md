@@ -88,6 +88,28 @@ cargo test
 RUSTFLAGS="-C target-cpu=native" cargo build --profile release-fast
 ```
 
+## wgpu texture I/O (`feature = "wgpu"`)
+
+Callers pass their existing `Device` / `Queue`. After `load_from`,
+`decode_to_texture` / `decode_preview_to_texture` produce a `Bgra8Unorm`
+texture (the API waits for GPU completion). `encode_from_texture` accepts
+`Bgra8Unorm` or `Rgba8Unorm` with `COPY_SRC` and is followed by `save_to`.
+
+Decode IDCT is a float AAN on the GPU (same dequant scale as CPU, 8-bit clamp
+at store). When the adapter exposes `BGRA8UNORM_STORAGE`, the compute pass
+writes the output texture directly (no buffer→texture copy). Encode samples the
+source texture and keeps integer FDCT + VMX quant so the bitstream is valid
+VMX. Preview is 1/8 resolution, so it uses CPU SIMD + `write_texture` rather
+than a compute pass. One submit per frame, persistent buffers. LTO is already
+on in `release` / `release-fast`; that helps the CPU Golomb/pack side, not the
+shaders. Direct D3D12/Vulkan calls would not remove the entropy or readback
+costs that dominate vs SIMD.
+
+```bash
+cargo test --features wgpu
+cargo run --release --example gpu_bench --features wgpu
+```
+
 ## License
 
 MIT — Copyright (c) 2026 Open Media Transport Contributors and MikanseiLaboratory.

@@ -296,33 +296,87 @@ pub fn decode_slices_fused_bgra(
     }
 }
 
-/// Entropy-decode all slices into zigzag coefficient blocks (Y/U/V).
+#[cfg(feature = "wgpu")]
+fn ensure_pack_len(buf: &mut Vec<u8>, len: usize) {
+    if buf.len() != len {
+        buf.resize(len, 0);
+    }
+}
+
+/// Entropy-decode all slices into compact GPU coefficient records (Y/U/V).
 #[cfg(feature = "wgpu")]
 pub fn decode_slices_coeffs(
     slices: &mut [SliceSet],
     strides: [usize; 3],
     dc_shift: i32,
-) -> Vec<[Vec<crate::codec::plane::CoeffBlock>; 3]> {
+    y_buf: &mut Vec<u8>,
+    u_buf: &mut Vec<u8>,
+    v_buf: &mut Vec<u8>,
+) {
+    use crate::gpu::pack::PACK_BYTES;
     use rayon::prelude::*;
-    slices
-        .par_iter_mut()
-        .map(|slice| {
-            prepare_slice_bitstream(slice);
-            let mut dest = [Vec::new(), Vec::new(), Vec::new()];
-            for pi in 0..3 {
-                crate::codec::plane::decode_plane_coeffs(
-                    pi,
-                    strides[pi],
-                    &mut slice.dc,
-                    &mut slice.ac,
-                    dc_shift,
-                    &mut slice.temp_block,
-                    &mut dest[pi],
-                );
-            }
-            dest
-        })
-        .collect()
+
+    let n_slices = slices.len();
+    let blocks_per_slice = |stride: usize| (stride / 8) * (SLICE_HEIGHT as usize / 8);
+    let y_bps = blocks_per_slice(strides[0]);
+    let u_bps = blocks_per_slice(strides[1]);
+    let v_bps = blocks_per_slice(strides[2]);
+    ensure_pack_len(y_buf, n_slices * y_bps * PACK_BYTES);
+    ensure_pack_len(u_buf, n_slices * u_bps * PACK_BYTES);
+    ensure_pack_len(v_buf, n_slices * v_bps * PACK_BYTES);
+    let y_ptr = y_buf.as_mut_ptr() as usize;
+    let u_ptr = u_buf.as_mut_ptr() as usize;
+    let v_ptr = v_buf.as_mut_ptr() as usize;
+
+    slices.par_iter_mut().enumerate().for_each(|(i, slice)| {
+        prepare_slice_bitstream(slice);
+        // SAFETY: each slice writes a disjoint PACK_BYTES*bps window.
+        let y_out = unsafe {
+            std::slice::from_raw_parts_mut(
+                (y_ptr as *mut u8).add(i * y_bps * PACK_BYTES),
+                y_bps * PACK_BYTES,
+            )
+        };
+        let u_out = unsafe {
+            std::slice::from_raw_parts_mut(
+                (u_ptr as *mut u8).add(i * u_bps * PACK_BYTES),
+                u_bps * PACK_BYTES,
+            )
+        };
+        let v_out = unsafe {
+            std::slice::from_raw_parts_mut(
+                (v_ptr as *mut u8).add(i * v_bps * PACK_BYTES),
+                v_bps * PACK_BYTES,
+            )
+        };
+        crate::codec::plane::decode_plane_coeffs(
+            0,
+            strides[0],
+            &mut slice.dc,
+            &mut slice.ac,
+            dc_shift,
+            &mut slice.temp_block,
+            y_out,
+        );
+        crate::codec::plane::decode_plane_coeffs(
+            1,
+            strides[1],
+            &mut slice.dc,
+            &mut slice.ac,
+            dc_shift,
+            &mut slice.temp_block,
+            u_out,
+        );
+        crate::codec::plane::decode_plane_coeffs(
+            2,
+            strides[2],
+            &mut slice.dc,
+            &mut slice.ac,
+            dc_shift,
+            &mut slice.temp_block,
+            v_out,
+        );
+    });
 }
 
 /// Golomb-encode full-frame zigzag blocks into slices (Y/U/V).

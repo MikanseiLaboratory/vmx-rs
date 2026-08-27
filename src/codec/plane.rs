@@ -209,17 +209,7 @@ pub fn decode_plane_scalar(
     ac.flush_remaining_read_bits();
 }
 
-/// One 8×8 block of entropy-decoded zigzag coefficients (pre-invquant).
-#[cfg(feature = "wgpu")]
-#[derive(Clone, Debug)]
-pub struct CoeffBlock {
-    /// Zigzag-ordered coefficients (`[0]` is reconstructed DC).
-    pub coeffs: [i16; 64],
-    /// `false` when the bitstream was already exhausted (DC broadcast path).
-    pub valid: bool,
-}
-
-/// Entropy-decode one slice plane into dense zigzag blocks (no IDCT).
+/// Entropy-decode one slice plane into 32-byte GPU records (i16 DC + i8 AC[1..30]).
 #[cfg(feature = "wgpu")]
 pub fn decode_plane_coeffs(
     plane_index: usize,
@@ -228,20 +218,17 @@ pub fn decode_plane_coeffs(
     ac: &mut SliceData,
     dc_shift: i32,
     temp_block: &mut [i16; 64],
-    out: &mut Vec<CoeffBlock>,
+    out: &mut [u8],
 ) {
     let height = SLICE_HEIGHT as usize;
     let mut dc_pred: i16 = 0;
     let mut terms_to_decode: u64 = 0;
-    let blocks_x = stride / 8;
-    let blocks_y = height / 8;
-    out.reserve(blocks_x * blocks_y);
     let _ = plane_index;
+    let mut bi = 0usize;
 
     for _y in (0..height).step_by(8) {
         for _x in (0..stride).step_by(8) {
             temp_block.fill(0);
-            let valid = terms_to_decode < 64;
 
             while terms_to_decode < 64 {
                 let l = ac.peek_golomb_lookup();
@@ -287,10 +274,12 @@ pub fn decode_plane_coeffs(
             temp_block[0] = temp_block[0].wrapping_add(dc_pred);
             dc_pred = temp_block[0];
 
-            out.push(CoeffBlock {
-                coeffs: *temp_block,
-                valid,
-            });
+            let o = bi * 32;
+            out[o..o + 2].copy_from_slice(&temp_block[0].to_le_bytes());
+            for i in 1..=30 {
+                out[o + 1 + i] = temp_block[i].clamp(-128, 127) as i8 as u8;
+            }
+            bi += 1;
         }
     }
 

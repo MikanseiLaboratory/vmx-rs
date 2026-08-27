@@ -1,9 +1,8 @@
-mod pack;
+pub(crate) mod pack;
 
 use crate::codec::slice::{decode_slices_coeffs, encode_slices_from_coeffs};
 use crate::color::convert::select_yuv_rgb;
 use crate::error::{Result, VmxError};
-use crate::gpu::pack::DensePlane;
 use crate::instance::Codec;
 use crate::tables::{
     FTAB1_128, FTAB2_128, FTAB3_128, FTAB4_128, IDCT_ROW_TABLES, RGB_YUV_601, RGB_YUV_709,
@@ -116,15 +115,19 @@ fn write_pod<T: bytemuck::Pod>(queue: &wgpu::Queue, buffer: &wgpu::Buffer, value
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
-struct DecodeParams {
-    blocks_x: u32,
-    blocks_y: u32,
-    stride: u32,
-    add_val: i32,
-    block_count: u32,
+struct FusedParams {
+    y_blocks_x: u32,
+    u_blocks_x: u32,
+    width: u32,
+    height: u32,
+    dst_stride: u32,
+    yuv_y: i32,
+    yuv_r: i32,
+    yuv_gu: i32,
+    yuv_gv: i32,
+    yuv_b: i32,
     _pad0: u32,
     _pad1: u32,
-    _pad2: u32,
 }
 
 #[repr(C)]
@@ -179,10 +182,7 @@ struct EncodeParams {
 
 struct PlaneGpu {
     coeff: wgpu::Buffer,
-    valid: wgpu::Buffer,
     plane: wgpu::Buffer,
-    ubo: wgpu::Buffer,
-    bind: wgpu::BindGroup,
     blocks_x: u32,
     blocks_y: u32,
 }
@@ -198,8 +198,13 @@ pub(crate) struct GpuSession {
     color_ubo: wgpu::Buffer,
     color_bind: wgpu::BindGroup,
     color_pipeline: wgpu::ComputePipeline,
-    idct_pipeline: wgpu::ComputePipeline,
+    fused_ubo: wgpu::Buffer,
+    fused_bind: wgpu::BindGroup,
+    fused_pipeline: wgpu::ComputePipeline,
     bgra_buf: wgpu::Buffer,
+    pack_y: Vec<u8>,
+    pack_u: Vec<u8>,
+    pack_v: Vec<u8>,
     textures: Vec<wgpu::Texture>,
     preview_textures: Vec<wgpu::Texture>,
     ring: usize,
@@ -271,28 +276,15 @@ fn compute_pipeline(
     })
 }
 
-fn make_plane(
-    device: &wgpu::Device,
-    layout: &wgpu::BindGroupLayout,
-    tables: &wgpu::Buffer,
-    stride: u32,
-    height: u32,
-    label: &str,
-) -> PlaneGpu {
+fn make_plane(device: &wgpu::Device, stride: u32, height: u32, label: &str) -> PlaneGpu {
     let blocks_x = (stride / 8).max(1);
     let blocks_y = (height / 8).max(1);
     let n = (blocks_x * blocks_y) as u64;
     let coeff = buf(
         device,
-        n * 64 * 2,
+        n * 32,
         wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
         &format!("{label}-coeff"),
-    );
-    let valid = buf(
-        device,
-        n * 4,
-        wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-        &format!("{label}-valid"),
     );
     let plane = buf(
         device,
@@ -300,29 +292,9 @@ fn make_plane(
         wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
         &format!("{label}-plane"),
     );
-    let ubo = buf(
-        device,
-        32,
-        wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-        &format!("{label}-ubo"),
-    );
-    let bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
-        label: Some(&format!("{label}-bg")),
-        layout,
-        entries: &[
-            bind(0, &ubo),
-            bind(1, tables),
-            bind(2, &coeff),
-            bind(3, &valid),
-            bind(4, &plane),
-        ],
-    });
     PlaneGpu {
         coeff,
-        valid,
         plane,
-        ubo,
-        bind,
         blocks_x,
         blocks_y,
     }
@@ -336,14 +308,15 @@ impl GpuSession {
         preview_w: u32,
         preview_h: u32,
     ) -> Self {
-        let idct_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("vmx-idct-bgl"),
+        let fused_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("vmx-fused-bgl"),
             entries: &[
                 ubo_entry(0),
                 storage_entry(1, true),
                 storage_entry(2, true),
                 storage_entry(3, true),
-                storage_entry(4, false),
+                storage_entry(4, true),
+                storage_entry(5, false),
             ],
         });
         let color_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -367,9 +340,9 @@ impl GpuSession {
             ],
         });
 
-        let idct_mod = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("vmx-idct"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("shaders/idct.wgsl").into()),
+        let fused_mod = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("vmx-decode"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("shaders/decode.wgsl").into()),
         });
         let color_mod = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("vmx-color"),
@@ -380,9 +353,9 @@ impl GpuSession {
             source: wgpu::ShaderSource::Wgsl(include_str!("shaders/encode.wgsl").into()),
         });
 
-        let idct_pl = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("vmx-idct-pl"),
-            bind_group_layouts: &[&idct_layout],
+        let fused_pl = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("vmx-fused-pl"),
+            bind_group_layouts: &[&fused_layout],
             push_constant_ranges: &[],
         });
         let color_pl = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -396,7 +369,8 @@ impl GpuSession {
             push_constant_ranges: &[],
         });
 
-        let idct_pipeline = compute_pipeline(device, &idct_pl, &idct_mod, "main", "vmx-idct-pipe");
+        let fused_pipeline =
+            compute_pipeline(device, &fused_pl, &fused_mod, "main", "vmx-fused-pipe");
         let color_pipeline =
             compute_pipeline(device, &color_pl, &color_mod, "main", "vmx-color-pipe");
         let color_encode_pipeline = compute_pipeline(
@@ -434,9 +408,9 @@ impl GpuSession {
         let ys = y_stride(width);
         let us = uv_stride(width);
         let ah = aligned_height(height);
-        let y = make_plane(device, &idct_layout, &decode_tables, ys, ah, "y");
-        let u = make_plane(device, &idct_layout, &decode_tables, us, ah, "u");
-        let v = make_plane(device, &idct_layout, &decode_tables, us, ah, "v");
+        let y = make_plane(device, ys, ah, "y");
+        let u = make_plane(device, us, ah, "u");
+        let v = make_plane(device, us, ah, "v");
 
         let dst_stride = padded_bpr(width) / 4;
         let bgra_buf = buf(
@@ -460,6 +434,25 @@ impl GpuSession {
                 bind(2, &u.plane),
                 bind(3, &v.plane),
                 bind(4, &bgra_buf),
+            ],
+        });
+
+        let fused_ubo = buf(
+            device,
+            48,
+            wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            "fused-ubo",
+        );
+        let fused_bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("fused-bg"),
+            layout: &fused_layout,
+            entries: &[
+                bind(0, &fused_ubo),
+                bind(1, &decode_tables),
+                bind(2, &y.coeff),
+                bind(3, &u.coeff),
+                bind(4, &v.coeff),
+                bind(5, &bgra_buf),
             ],
         });
 
@@ -552,8 +545,13 @@ impl GpuSession {
             color_ubo,
             color_bind,
             color_pipeline,
-            idct_pipeline,
+            fused_ubo,
+            fused_bind,
+            fused_pipeline,
             bgra_buf,
+            pack_y: Vec::new(),
+            pack_u: Vec::new(),
+            pack_v: Vec::new(),
             textures,
             preview_textures,
             ring: 0,
@@ -645,16 +643,32 @@ impl Codec {
             self.planes.stride[1],
             self.planes.stride[2],
         ];
-        let packs = decode_slices_coeffs(&mut self.slices, strides, self.dc_shift);
-        let y = DensePlane::from_packs(&packs, 0, strides[0], 128);
-        let u = DensePlane::from_packs(&packs, 1, strides[1], 0);
-        let v = DensePlane::from_packs(&packs, 2, strides[2], 0);
+        let t0 = std::time::Instant::now();
+        let mut gpu = self.gpu.take().expect("gpu");
+        decode_slices_coeffs(
+            &mut self.slices,
+            strides,
+            self.dc_shift,
+            &mut gpu.pack_y,
+            &mut gpu.pack_u,
+            &mut gpu.pack_v,
+        );
+        self.gpu = Some(gpu);
+        let t1 = std::time::Instant::now();
         let idx = self.decode_matrix_idx;
         let matrix: Vec<i32> = self.decode_presets[idx]
             .iter()
             .map(|&m| i32::from(m as i16))
             .collect();
-        self.dispatch_decode(device, queue, &y, &u, &v, &matrix)
+        let frame = self.dispatch_decode(device, queue, &matrix)?;
+        if std::env::var_os("VMX_GPU_TRACE").is_some() {
+            eprintln!(
+                "gpu_trace golomb_pack={:.3}ms dispatch={:.3}ms",
+                t1.duration_since(t0).as_secs_f64() * 1e3,
+                t1.elapsed().as_secs_f64() * 1e3
+            );
+        }
+        Ok(frame)
     }
 
     /// Decode a 1/8 preview into a BGRA texture on `device`.
@@ -720,99 +734,54 @@ impl Codec {
         queue.write_buffer(&gpu.decode_tables, 256 * 4, bytemuck::bytes_of(&m));
     }
 
-    fn upload_plane(queue: &wgpu::Queue, plane: &PlaneGpu, pack: &DensePlane) {
-        let params = DecodeParams {
-            blocks_x: pack.blocks_x.max(1),
-            blocks_y: pack.blocks_y.max(1),
-            stride: pack.stride,
-            add_val: pack.add_val,
-            block_count: pack.block_count().max(1),
-            _pad0: 0,
-            _pad1: 0,
-            _pad2: 0,
-        };
-        write_pod(queue, &plane.ubo, &params);
-        write_bytes(queue, &plane.coeff, bytemuck::cast_slice(&pack.coeffs));
-        write_bytes(queue, &plane.valid, bytemuck::cast_slice(&pack.valid));
-    }
-
     fn dispatch_decode(
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
-        y: &DensePlane,
-        u: &DensePlane,
-        v: &DensePlane,
         matrix: &[i32],
     ) -> Result<GpuFrame> {
         self.upload_idct_tables(queue, matrix);
         let gpu = self.gpu.as_mut().ok_or_else(|| gpu_err("gpu session"))?;
-        Self::upload_plane(queue, &gpu.y, y);
-        Self::upload_plane(queue, &gpu.u, u);
-        Self::upload_plane(queue, &gpu.v, v);
+        let t_up = std::time::Instant::now();
+        write_bytes(queue, &gpu.y.coeff, &gpu.pack_y);
+        write_bytes(queue, &gpu.u.coeff, &gpu.pack_u);
+        write_bytes(queue, &gpu.v.coeff, &gpu.pack_v);
+        let t_enc = std::time::Instant::now();
 
         let w = self.size.width as u32;
         let h = self.size.height as u32;
-        let mut cp = yuv_table(self.color_space, self.size.height);
-        cp.width = w;
-        cp.height = h;
-        cp.y_stride = y.stride;
-        cp.u_stride = u.stride;
-        cp.v_stride = v.stride;
-        cp.dst_stride = padded_bpr(w) / 4;
-        write_pod(queue, &gpu.color_ubo, &cp);
+        let yuv = yuv_table(self.color_space, self.size.height);
+        let fused = FusedParams {
+            y_blocks_x: gpu.y.blocks_x.max(1),
+            u_blocks_x: gpu.u.blocks_x.max(1),
+            width: w,
+            height: h,
+            dst_stride: padded_bpr(w) / 4,
+            yuv_y: yuv.yuv_y,
+            yuv_r: yuv.yuv_r,
+            yuv_gu: yuv.yuv_gu,
+            yuv_gv: yuv.yuv_gv,
+            yuv_b: yuv.yuv_b,
+            _pad0: 0,
+            _pad1: 0,
+        };
+        write_pod(queue, &gpu.fused_ubo, &fused);
 
         gpu.ring = (gpu.ring + 1) % RING;
         let tex = gpu.textures[gpu.ring].clone();
+        let tiles = gpu.u.blocks_x.saturating_mul(gpu.u.blocks_y).max(1);
 
         let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("vmx-decode"),
         });
         {
             let mut pass = enc.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                label: Some("idct"),
+                label: Some("decode"),
                 timestamp_writes: None,
             });
-            pass.set_pipeline(&gpu.idct_pipeline);
-            pass.set_bind_group(0, &gpu.y.bind, &[]);
-            pass.dispatch_workgroups(
-                gpu.y
-                    .blocks_x
-                    .saturating_mul(gpu.y.blocks_y)
-                    .div_ceil(8)
-                    .max(1),
-                1,
-                1,
-            );
-            pass.set_bind_group(0, &gpu.u.bind, &[]);
-            pass.dispatch_workgroups(
-                gpu.u
-                    .blocks_x
-                    .saturating_mul(gpu.u.blocks_y)
-                    .div_ceil(8)
-                    .max(1),
-                1,
-                1,
-            );
-            pass.set_bind_group(0, &gpu.v.bind, &[]);
-            pass.dispatch_workgroups(
-                gpu.v
-                    .blocks_x
-                    .saturating_mul(gpu.v.blocks_y)
-                    .div_ceil(8)
-                    .max(1),
-                1,
-                1,
-            );
-        }
-        {
-            let mut pass = enc.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                label: Some("color"),
-                timestamp_writes: None,
-            });
-            pass.set_pipeline(&gpu.color_pipeline);
-            pass.set_bind_group(0, &gpu.color_bind, &[]);
-            pass.dispatch_workgroups((w / 2).div_ceil(8).max(1), h.div_ceil(8).max(1), 1);
+            pass.set_pipeline(&gpu.fused_pipeline);
+            pass.set_bind_group(0, &gpu.fused_bind, &[]);
+            pass.dispatch_workgroups(tiles, 1, 1);
         }
         enc.copy_buffer_to_texture(
             wgpu::TexelCopyBufferInfo {
@@ -836,7 +805,16 @@ impl Codec {
             },
         );
         let index = queue.submit(Some(enc.finish()));
+        let t_wait = std::time::Instant::now();
         wait(device, &index);
+        if std::env::var_os("VMX_GPU_TRACE").is_some() {
+            eprintln!(
+                "gpu_trace upload={:.3}ms encode={:.3}ms wait={:.3}ms",
+                t_enc.duration_since(t_up).as_secs_f64() * 1e3,
+                t_wait.duration_since(t_enc).as_secs_f64() * 1e3,
+                t_wait.elapsed().as_secs_f64() * 1e3
+            );
+        }
         Ok(GpuFrame {
             texture: tex,
             width: w,

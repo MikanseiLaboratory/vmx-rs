@@ -280,6 +280,7 @@ fn bench_resolution(
             let _frame = gpu_dec
                 .decode_to_texture(device, queue)
                 .expect("gpu decode");
+            wait_idle(device);
         }),
     );
 
@@ -314,6 +315,7 @@ fn bench_resolution(
             let _frame = gpu_dec
                 .decode_preview_to_texture(device, queue)
                 .expect("gpu preview");
+            wait_idle(device);
         }),
     );
 

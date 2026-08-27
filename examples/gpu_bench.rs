@@ -363,8 +363,13 @@ fn main() {
 
     let info = adapter.get_info();
     println!(
-        "adapter={} backend={:?} device_type={:?}",
-        info.name, info.backend, info.device_type
+        "adapter={} backend={:?} device_type={:?} bgra8_storage={}",
+        info.name,
+        info.backend,
+        info.device_type,
+        adapter
+            .features()
+            .contains(wgpu::Features::BGRA8UNORM_STORAGE)
     );
 
     let mut args = std::env::args().skip(1);

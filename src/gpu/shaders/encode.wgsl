@@ -1,4 +1,5 @@
-// BGRA packed buffer → planar YUV 4:2:2 → integer FDCT + quant + zigzag.
+// Sample BGRA/RGBA texture → integer FDCT + quant + zigzag.
+// YUV planes stay on chip; only dense i16 coefficients are written out.
 
 struct EncodeParams {
     width: u32,
@@ -32,11 +33,9 @@ struct EncodeParams {
 }
 
 @group(0) @binding(0) var<uniform> params: EncodeParams;
-@group(0) @binding(1) var<storage, read> bgra: array<u32>;
-// tables: [0..128) ftab, [128..192) zigzag_inv, [192..384) encode_matrix
+@group(0) @binding(1) var src_tex: texture_2d<f32>;
 @group(0) @binding(2) var<storage, read> tables: array<i32>;
-@group(0) @binding(3) var<storage, read_write> yuv: array<u32>;
-@group(0) @binding(4) var<storage, read_write> coeffs: array<u32>;
+@group(0) @binding(3) var<storage, read_write> coeffs: array<u32>;
 
 const SHIFT_FRW_COL: i32 = 3;
 const SHIFT_FRW_ROW: i32 = 16;
@@ -57,44 +56,50 @@ fn ftab(i: u32) -> i32 { return tables[i]; }
 fn zigzag_inv(i: u32) -> u32 { return u32(tables[128u + i]); }
 fn enc_matrix(i: u32) -> u32 { return u32(tables[192u + i]); }
 
-fn rgb_to_y(r: i32, g: i32, b: i32) -> u32 {
+fn unorm_u8(v: f32) -> i32 {
+    return i32(clamp(v, 0.0, 1.0) * 255.0 + 0.5);
+}
+
+fn load_rgba(px: u32, py: u32) -> vec4<i32> {
+    let x = i32(min(px, params.width - 1u));
+    let y = i32(min(py, params.height - 1u));
+    let c = textureLoad(src_tex, vec2<i32>(x, y), 0);
+    return vec4<i32>(unorm_u8(c.r), unorm_u8(c.g), unorm_u8(c.b), unorm_u8(c.a));
+}
+
+fn rgb_to_y(r: i32, g: i32, b: i32) -> i32 {
     let y = (params.y_r * r + params.y_g * g + params.y_b * b + 128) >> 8u;
-    return u32(clamp(y + 16, 0, 255));
+    return clamp(y + 16, 0, 255);
 }
 
 fn rgb_to_chroma(r: i32, g: i32, b: i32, cr: i32, cg: i32, cb: i32) -> i32 {
     return ((cr * r + cg * g + cb * b + 128) >> 8u) + 128;
 }
 
-@compute @workgroup_size(8, 8)
-fn color_main(@builtin(global_invocation_id) gid: vec3<u32>) {
-    let x_pair = gid.x;
-    let y = gid.y;
-    let px = x_pair * 2u;
-    if (y >= params.height || px + 1u >= params.width) { return; }
-    var u_sum = 0;
-    var v_sum = 0;
-    for (var i: u32 = 0u; i < 2u; i = i + 1u) {
-        let packed = bgra[y * params.src_stride + px + i];
-        var b: i32;
-        var g: i32;
-        var r: i32;
-        if (params.src_rgba != 0u) {
-            r = i32(packed & 0xFFu);
-            g = i32((packed >> 8u) & 0xFFu);
-            b = i32((packed >> 16u) & 0xFFu);
-        } else {
-            b = i32(packed & 0xFFu);
-            g = i32((packed >> 8u) & 0xFFu);
-            r = i32((packed >> 16u) & 0xFFu);
-        }
-        yuv[y * params.y_stride + px + i] = rgb_to_y(r, g, b);
-        yuv[params.a_plane_off + y * params.y_stride + px + i] = (packed >> 24u) & 0xFFu;
-        u_sum = u_sum + rgb_to_chroma(r, g, b, params.u_r, params.u_g, params.u_b);
-        v_sum = v_sum + rgb_to_chroma(r, g, b, params.v_r, params.v_g, params.v_b);
-    }
-    yuv[params.u_plane_off + y * params.u_stride + x_pair] = u32(clamp(u_sum >> 1u, 0, 255));
-    yuv[params.v_plane_off + y * params.v_stride + x_pair] = u32(clamp(v_sum >> 1u, 0, 255));
+fn sample_y(px: u32, py: u32) -> i32 {
+    let p = load_rgba(px, py);
+    return sat_add_i16(rgb_to_y(p.x, p.y, p.z), params.add_y);
+}
+
+fn sample_a(px: u32, py: u32) -> i32 {
+    let p = load_rgba(px, py);
+    return sat_add_i16(p.w, params.add_y);
+}
+
+fn sample_u(cx: u32, cy: u32) -> i32 {
+    let p0 = load_rgba(cx * 2u, cy);
+    let p1 = load_rgba(cx * 2u + 1u, cy);
+    let u0 = rgb_to_chroma(p0.x, p0.y, p0.z, params.u_r, params.u_g, params.u_b);
+    let u1 = rgb_to_chroma(p1.x, p1.y, p1.z, params.u_r, params.u_g, params.u_b);
+    return sat_add_i16(clamp((u0 + u1) >> 1u, 0, 255), params.add_uv);
+}
+
+fn sample_v(cx: u32, cy: u32) -> i32 {
+    let p0 = load_rgba(cx * 2u, cy);
+    let p1 = load_rgba(cx * 2u + 1u, cy);
+    let v0 = rgb_to_chroma(p0.x, p0.y, p0.z, params.v_r, params.v_g, params.v_b);
+    let v1 = rgb_to_chroma(p1.x, p1.y, p1.z, params.v_r, params.v_g, params.v_b);
+    return sat_add_i16(clamp((v0 + v1) >> 1u, 0, 255), params.add_uv);
 }
 
 fn fdct_row(input: array<i32, 8>, ftab_base: u32) -> array<i32, 8> {
@@ -221,14 +226,7 @@ fn spatial_quant(v: i32, i: u32) -> i32 {
     return i32(q);
 }
 
-fn fdct_quant_zig(plane_off: u32, stride: u32, px: u32, py: u32, add_val: i32, out_base: u32) {
-    var rows: array<array<i32, 8>, 8>;
-    for (var y: u32 = 0u; y < 8u; y = y + 1u) {
-        for (var x: u32 = 0u; x < 8u; x = x + 1u) {
-            let p = i32(yuv[plane_off + (py + y) * stride + (px + x)]);
-            rows[y][x] = sat_add_i16(p, add_val);
-        }
-    }
+fn fdct_quant_from_rows(rows: array<array<i32, 8>, 8>, out_base: u32) {
     var cols: array<array<i32, 8>, 8>;
     for (var x: u32 = 0u; x < 8u; x = x + 1u) {
         let c = fdct_column_one(array<i32, 8>(rows[0][x], rows[1][x], rows[2][x], rows[3][x], rows[4][x], rows[5][x], rows[6][x], rows[7][x]));
@@ -263,7 +261,15 @@ fn fdct_y(@builtin(global_invocation_id) gid: vec3<u32>) {
     if (block >= count) { return; }
     let bx = block % params.y_blocks_x;
     let by = block / params.y_blocks_x;
-    fdct_quant_zig(0u, params.y_stride, bx * 8u, by * 8u, params.add_y, block * 64u);
+    let px = bx * 8u;
+    let py = by * 8u;
+    var rows: array<array<i32, 8>, 8>;
+    for (var y: u32 = 0u; y < 8u; y = y + 1u) {
+        for (var x: u32 = 0u; x < 8u; x = x + 1u) {
+            rows[y][x] = sample_y(px + x, py + y);
+        }
+    }
+    fdct_quant_from_rows(rows, block * 64u);
 }
 
 @compute @workgroup_size(64)
@@ -273,7 +279,15 @@ fn fdct_u(@builtin(global_invocation_id) gid: vec3<u32>) {
     if (block >= count) { return; }
     let bx = block % params.u_blocks_x;
     let by = block / params.u_blocks_x;
-    fdct_quant_zig(params.u_plane_off, params.u_stride, bx * 8u, by * 8u, params.add_uv, params.u_coeff_off + block * 64u);
+    let cx = bx * 8u;
+    let cy = by * 8u;
+    var rows: array<array<i32, 8>, 8>;
+    for (var y: u32 = 0u; y < 8u; y = y + 1u) {
+        for (var x: u32 = 0u; x < 8u; x = x + 1u) {
+            rows[y][x] = sample_u(cx + x, cy + y);
+        }
+    }
+    fdct_quant_from_rows(rows, params.u_coeff_off + block * 64u);
 }
 
 @compute @workgroup_size(64)
@@ -283,7 +297,15 @@ fn fdct_v(@builtin(global_invocation_id) gid: vec3<u32>) {
     if (block >= count) { return; }
     let bx = block % params.u_blocks_x;
     let by = block / params.u_blocks_x;
-    fdct_quant_zig(params.v_plane_off, params.v_stride, bx * 8u, by * 8u, params.add_uv, params.v_coeff_off + block * 64u);
+    let cx = bx * 8u;
+    let cy = by * 8u;
+    var rows: array<array<i32, 8>, 8>;
+    for (var y: u32 = 0u; y < 8u; y = y + 1u) {
+        for (var x: u32 = 0u; x < 8u; x = x + 1u) {
+            rows[y][x] = sample_v(cx + x, cy + y);
+        }
+    }
+    fdct_quant_from_rows(rows, params.v_coeff_off + block * 64u);
 }
 
 @compute @workgroup_size(64)
@@ -293,5 +315,13 @@ fn fdct_a(@builtin(global_invocation_id) gid: vec3<u32>) {
     if (block >= count) { return; }
     let bx = block % params.y_blocks_x;
     let by = block / params.y_blocks_x;
-    fdct_quant_zig(params.a_plane_off, params.y_stride, bx * 8u, by * 8u, params.add_y, params.a_coeff_off + block * 64u);
+    let px = bx * 8u;
+    let py = by * 8u;
+    var rows: array<array<i32, 8>, 8>;
+    for (var y: u32 = 0u; y < 8u; y = y + 1u) {
+        for (var x: u32 = 0u; x < 8u; x = x + 1u) {
+            rows[y][x] = sample_a(px + x, py + y);
+        }
+    }
+    fdct_quant_from_rows(rows, params.a_coeff_off + block * 64u);
 }

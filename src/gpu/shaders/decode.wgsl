@@ -1,5 +1,6 @@
-// Fused float AAN IDCT + YUV 4:2:2 → packed BGRA.
+// Fused float AAN IDCT + YUV 4:2:2 → BGRA.
 // One workgroup (32 threads) covers a 16×8 luma tile: 2 Y blocks + 1 U + 1 V.
+// IDCT row tables are shader constants (no per-frame table fetch).
 
 struct FusedParams {
     y_blocks_x: u32,
@@ -12,16 +13,13 @@ struct FusedParams {
     yuv_gu: i32,
     yuv_gv: i32,
     yuv_b: i32,
-    _pad0: u32,
-    _pad1: u32,
+    u_word_off: u32,
+    v_word_off: u32,
 }
 
 @group(0) @binding(0) var<uniform> params: FusedParams;
-@group(0) @binding(1) var<storage, read> tables: array<i32>;
-@group(0) @binding(2) var<storage, read> y_coeffs: array<u32>;
-@group(0) @binding(3) var<storage, read> u_coeffs: array<u32>;
-@group(0) @binding(4) var<storage, read> v_coeffs: array<u32>;
-@group(0) @binding(5) var<storage, read_write> bgra: array<u32>;
+@group(0) @binding(1) var<storage, read> matrix: array<i32>;
+@group(0) @binding(2) var<storage, read> coeffs: array<u32>;
 
 const IDCT_TG1: f32 = 13036.0 / 65536.0;
 const IDCT_TG2: f32 = 27146.0 / 65536.0;
@@ -39,17 +37,52 @@ const ZIGZAG_INV: array<u32, 64> = array<u32, 64>(
     35u, 36u, 48u, 49u, 57u, 58u, 62u, 63u,
 );
 
+const TAB04: array<f32, 32> = array<f32, 32>(
+    16384.0, 21407.0, 16384.0, 8867.0, 16384.0, -8867.0, 16384.0, -21407.0,
+    16384.0, 8867.0, -16384.0, -21407.0, -16384.0, 21407.0, 16384.0, -8867.0,
+    22725.0, 19266.0, 19266.0, -4520.0, 12873.0, -22725.0, 4520.0, -12873.0,
+    12873.0, 4520.0, -22725.0, -12873.0, 4520.0, 19266.0, 19266.0, -22725.0,
+);
+const TAB17: array<f32, 32> = array<f32, 32>(
+    22725.0, 29692.0, 22725.0, 12299.0, 22725.0, -12299.0, 22725.0, -29692.0,
+    22725.0, 12299.0, -22725.0, -29692.0, -22725.0, 29692.0, 22725.0, -12299.0,
+    31521.0, 26722.0, 26722.0, -6270.0, 17855.0, -31521.0, 6270.0, -17855.0,
+    17855.0, 6270.0, -31521.0, -17855.0, 6270.0, 26722.0, 26722.0, -31521.0,
+);
+const TAB26: array<f32, 32> = array<f32, 32>(
+    21407.0, 27969.0, 21407.0, 11585.0, 21407.0, -11585.0, 21407.0, -27969.0,
+    21407.0, 11585.0, -21407.0, -27969.0, -21407.0, 27969.0, 21407.0, -11585.0,
+    29692.0, 25172.0, 25172.0, -5906.0, 16819.0, -29692.0, 5906.0, -16819.0,
+    16819.0, 5906.0, -29692.0, -16819.0, 5906.0, 25172.0, 25172.0, -29692.0,
+);
+const TAB35: array<f32, 32> = array<f32, 32>(
+    19266.0, 25172.0, 19266.0, 10426.0, 19266.0, -10426.0, 19266.0, -25172.0,
+    19266.0, 10426.0, -19266.0, -25172.0, -19266.0, 25172.0, 19266.0, -10426.0,
+    26722.0, 22654.0, 22654.0, -5315.0, 15137.0, -26722.0, 5315.0, -15137.0,
+    15137.0, 5315.0, -26722.0, -15137.0, 5315.0, 22654.0, 22654.0, -26722.0,
+);
+
 var<workgroup> sm: array<f32, 256>;
 
+fn idct_tab(row: u32, i: u32) -> f32 {
+    switch row {
+        case 0u, 4u: { return TAB04[i]; }
+        case 1u, 7u: { return TAB17[i]; }
+        case 2u, 6u: { return TAB26[i]; }
+        default: { return TAB35[i]; }
+    }
+}
+
 fn load_word(plane: u32, block: u32, wi: u32) -> u32 {
-    let idx = block * 8u + wi;
+    var base: u32;
     if (plane <= 1u) {
-        return y_coeffs[idx];
+        base = 0u;
+    } else if (plane == 2u) {
+        base = params.u_word_off;
+    } else {
+        base = params.v_word_off;
     }
-    if (plane == 2u) {
-        return u_coeffs[idx];
-    }
-    return v_coeffs[idx];
+    return coeffs[base + block * 8u + wi];
 }
 
 fn load_coeff(plane: u32, block: u32, zig: u32) -> i32 {
@@ -66,12 +99,8 @@ fn load_coeff(plane: u32, block: u32, zig: u32) -> i32 {
     return (i32(w >> s) << 24u) >> 24u;
 }
 
-fn idct_tab(row: u32, i: u32) -> f32 {
-    return f32(tables[row * 32u + i]);
-}
-
 fn dec_matrix(i: u32) -> i32 {
-    return tables[256u + i];
+    return matrix[i];
 }
 
 fn idct_row(x0: f32, x1: f32, x2: f32, x3: f32, x4: f32, x5: f32, x6: f32, x7: f32, row: u32) -> array<f32, 8> {
@@ -144,7 +173,25 @@ fn sat_sub_i16(a: i32, b: i32) -> i32 {
     return clamp(a - b, -32768, 32767);
 }
 
-fn yuv_to_bgra(yy: u32, cb: i32, cr: i32) -> u32 {
+fn yuv_to_rgba(yy: u32, cb: i32, cr: i32) -> vec4<f32> {
+    var y_sat = i32(yy);
+    if (y_sat < 16) {
+        y_sat = 0;
+    } else {
+        y_sat = y_sat - 16;
+    }
+    let y0 = mulhi_i16(y_sat << 6u, params.yuv_y);
+    let r = sat_add_i16(y0, mulhi_i16(cr << 6u, params.yuv_r));
+    let b = sat_add_i16(y0, mulhi_i16(cb << 7u, params.yuv_b));
+    var g = sat_sub_i16(y0, mulhi_i16(cb << 6u, params.yuv_gu));
+    g = sat_sub_i16(g, mulhi_i16(cr << 6u, params.yuv_gv));
+    let ro = clamp((sat_add_i16(r, 8)) >> 4u, 0, 255);
+    let go = clamp((sat_add_i16(g, 8)) >> 4u, 0, 255);
+    let bo = clamp((sat_add_i16(b, 8)) >> 4u, 0, 255);
+    return vec4<f32>(f32(ro), f32(go), f32(bo), 255.0) / 255.0;
+}
+
+fn yuv_to_packed(yy: u32, cb: i32, cr: i32) -> u32 {
     var y_sat = i32(yy);
     if (y_sat < 16) {
         y_sat = 0;
@@ -162,14 +209,9 @@ fn yuv_to_bgra(yy: u32, cb: i32, cr: i32) -> u32 {
     return u32(bo) | (u32(go) << 8u) | (u32(ro) << 16u) | 0xFF000000u;
 }
 
-@compute @workgroup_size(32)
-fn main(
-    @builtin(local_invocation_index) lid: u32,
-    @builtin(workgroup_id) wid: vec3<u32>,
-) {
+fn run_idct(lid: u32, tile: u32) {
     let u_bx = max(params.u_blocks_x, 1u);
     let y_bx = params.y_blocks_x;
-    let tile = wid.x;
     let cx = tile % u_bx;
     let cy = tile / u_bx;
 
@@ -231,25 +273,14 @@ fn main(
         }
     }
     workgroupBarrier();
+}
 
-    if (lid < 16u) {
-        let lx = lid;
-        let px = cx * 16u + lx;
-        let py0 = cy * 8u;
-        if (px < params.width) {
-            let ybase = select(0u, 64u, lx >= 8u);
-            let x8 = lx % 8u;
-            let ux = lx / 2u;
-            for (var k: u32 = 0u; k < 8u; k = k + 1u) {
-                let py = py0 + k;
-                if (py >= params.height) {
-                    break;
-                }
-                let yy = u32(clamp(sm[ybase + k * 8u + x8], 0.0, 255.0));
-                let cb = i32(clamp(sm[128u + k * 8u + ux], 0.0, 255.0)) - 128;
-                let cr = i32(clamp(sm[192u + k * 8u + ux], 0.0, 255.0)) - 128;
-                bgra[py * params.dst_stride + px] = yuv_to_bgra(yy, cb, cr);
-            }
-        }
-    }
+fn tile_px(lid: u32, tile: u32) -> vec4<u32> {
+    let u_bx = max(params.u_blocks_x, 1u);
+    let cx = tile % u_bx;
+    let cy = tile / u_bx;
+    let lx = lid;
+    let px = cx * 16u + lx;
+    let py0 = cy * 8u;
+    return vec4<u32>(px, py0, lx, u32(px < params.width));
 }

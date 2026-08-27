@@ -34,14 +34,15 @@ pub fn request_headless_device()
         force_fallback: bool,
         power: wgpu::PowerPreference,
     ) -> Option<(wgpu::Instance, wgpu::Adapter)> {
-        let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
             backends,
-            ..Default::default()
+            ..wgpu::InstanceDescriptor::new_without_display_handle()
         });
         let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
             power_preference: power,
             compatible_surface: None,
             force_fallback_adapter: force_fallback,
+            ..Default::default()
         }))
         .ok()?;
         Some((instance, adapter))
@@ -82,13 +83,17 @@ pub fn request_headless_device()
         required_limits: wgpu::Limits::default(),
         memory_hints: wgpu::MemoryHints::Performance,
         trace: wgpu::Trace::Off,
+        ..Default::default()
     }))
     .ok()?;
     Some((instance, adapter, device, queue))
 }
 
 pub(crate) fn wait(device: &wgpu::Device, index: &wgpu::SubmissionIndex) {
-    let _ = device.poll(wgpu::PollType::WaitForSubmissionIndex(index.clone()));
+    let _ = device.poll(wgpu::PollType::Wait {
+        submission_index: Some(index.clone()),
+        timeout: None,
+    });
 }
 
 #[inline(always)]
@@ -381,13 +386,13 @@ impl GpuSession {
 
         let fused_pl = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("vmx-fused-pl"),
-            bind_group_layouts: &[&fused_layout],
-            push_constant_ranges: &[],
+            bind_group_layouts: &[Some(&fused_layout)],
+            immediate_size: 0,
         });
         let encode_pl = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("vmx-encode-pl"),
-            bind_group_layouts: &[&encode_layout],
-            push_constant_ranges: &[],
+            bind_group_layouts: &[Some(&encode_layout)],
+            immediate_size: 0,
         });
 
         let fused_pipeline =
@@ -504,7 +509,10 @@ impl GpuSession {
             mapped_at_creation: true,
         });
         {
-            let mut data = enc_tables.slice(..).get_mapped_range_mut();
+            let mut data = enc_tables
+                .slice(..)
+                .get_mapped_range_mut()
+                .expect("enc-tables map");
             let mut tables = Vec::with_capacity(384);
             for t in [&FTAB1_128, &FTAB2_128, &FTAB3_128, &FTAB4_128] {
                 tables.extend(t.iter().map(|&v| i32::from(v)));
@@ -1002,9 +1010,9 @@ fn encode_from_mapped(
 ) {
     let slice = buf.slice(..);
     slice.map_async(wgpu::MapMode::Read, |_| {});
-    let _ = device.poll(wgpu::PollType::Wait);
+    let _ = device.poll(wgpu::PollType::wait_indefinitely());
     {
-        let data = slice.get_mapped_range();
+        let data = slice.get_mapped_range().expect("coeff map");
         let vals: &[i16] = bytemuck::cast_slice(&data);
         encode_slices_from_coeffs(slices, strides, vals, y_n, u_n, a_n, dc_shift);
     }
@@ -1054,8 +1062,8 @@ pub fn read_texture_bgra(
     wait(device, &index);
     let slice = buf.slice(..);
     slice.map_async(wgpu::MapMode::Read, |_| {});
-    let _ = device.poll(wgpu::PollType::Wait);
-    let data = slice.get_mapped_range();
+    let _ = device.poll(wgpu::PollType::wait_indefinitely());
+    let data = slice.get_mapped_range().expect("readback map");
     let mut out = vec![0u8; (width * height * 4) as usize];
     let row = (width * 4) as usize;
     for y in 0..height as usize {

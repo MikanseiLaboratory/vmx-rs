@@ -45,7 +45,7 @@ fn timed_iters<F: FnMut()>(warmup: usize, iters: usize, mut body: F) -> Vec<f64>
 }
 
 fn wait_idle(device: &wgpu::Device) {
-    let _ = device.poll(wgpu::PollType::Wait);
+    let _ = device.poll(wgpu::PollType::wait_indefinitely());
 }
 
 fn psnr_bgra(a: &[u8], b: &[u8]) -> f64 {

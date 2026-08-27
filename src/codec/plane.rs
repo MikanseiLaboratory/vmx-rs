@@ -211,6 +211,7 @@ pub fn decode_plane_scalar(
 
 /// Entropy-decode one slice plane into 32-byte GPU records (i16 DC + i8 AC[1..30]).
 #[cfg(feature = "wgpu")]
+#[inline(always)]
 pub fn decode_plane_coeffs(
     plane_index: usize,
     stride: usize,
@@ -311,10 +312,11 @@ pub fn encode_plane_from_blocks(
 
     for _y in (0..height).step_by(8) {
         for _x in (0..stride).step_by(8) {
+            let zero = [0i16; 64];
             let temp_block = if bi < blocks.len() {
-                blocks[bi]
+                &blocks[bi]
             } else {
-                [0i16; 64]
+                &zero
             };
             bi += 1;
 

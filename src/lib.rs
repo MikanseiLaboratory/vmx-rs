@@ -10,6 +10,8 @@ mod codec;
 mod color;
 mod container;
 mod error;
+#[cfg(feature = "wgpu")]
+pub mod gpu;
 mod instance;
 pub mod simd;
 mod tables;
@@ -19,6 +21,8 @@ mod types;
 pub use color::ColorSimdPath;
 pub use container::preview_bitstream_length;
 pub use error::{Result, VmxError};
+#[cfg(feature = "wgpu")]
+pub use gpu::{GpuFrame, request_headless_device};
 pub use instance::{Codec, Config};
 pub use simd::{SimdCapabilities, SimdPath};
 pub use types::{

@@ -295,3 +295,94 @@ pub fn decode_slices_fused_bgra(
         _ => pack_chunk(slices),
     }
 }
+
+/// Entropy-decode all slices into zigzag coefficient blocks (Y/U/V).
+#[cfg(feature = "wgpu")]
+pub fn decode_slices_coeffs(
+    slices: &mut [SliceSet],
+    strides: [usize; 3],
+    dc_shift: i32,
+) -> Vec<[Vec<crate::codec::plane::CoeffBlock>; 3]> {
+    let n = slices.len();
+    let mut out = Vec::with_capacity(n);
+    for slice in slices.iter_mut() {
+        prepare_slice_bitstream(slice);
+        let mut dest = [Vec::new(), Vec::new(), Vec::new()];
+        for pi in 0..3 {
+            crate::codec::plane::decode_plane_coeffs(
+                pi,
+                strides[pi],
+                &mut slice.dc,
+                &mut slice.ac,
+                dc_shift,
+                &mut slice.temp_block,
+                &mut dest[pi],
+            );
+        }
+        out.push(dest);
+    }
+    out
+}
+
+/// Golomb-encode full-frame zigzag blocks into slices (Y/U/V).
+#[cfg(feature = "wgpu")]
+pub fn encode_slices_from_coeffs(
+    slices: &mut [SliceSet],
+    strides: [usize; 4],
+    y_blocks: &[[i16; 64]],
+    u_blocks: &[[i16; 64]],
+    v_blocks: &[[i16; 64]],
+    a_blocks: Option<&[[i16; 64]]>,
+    dc_shift: i32,
+) {
+    let y_bx = strides[0] / 8;
+    let u_bx = strides[1] / 8;
+    let v_bx = strides[2] / 8;
+    let a_bx = strides[3] / 8;
+    let by_per_slice = (SLICE_HEIGHT as usize) / 8;
+    for (si, slice) in slices.iter_mut().enumerate() {
+        slice.reset();
+        let y0 = si * by_per_slice * y_bx;
+        let y1 = y0 + by_per_slice * y_bx;
+        let u0 = si * by_per_slice * u_bx;
+        let u1 = u0 + by_per_slice * u_bx;
+        let v0 = si * by_per_slice * v_bx;
+        let v1 = v0 + by_per_slice * v_bx;
+        crate::codec::plane::encode_plane_from_blocks(
+            0,
+            strides[0],
+            &y_blocks[y0.min(y_blocks.len())..y1.min(y_blocks.len())],
+            &mut slice.dc,
+            &mut slice.ac,
+            dc_shift,
+        );
+        crate::codec::plane::encode_plane_from_blocks(
+            1,
+            strides[1],
+            &u_blocks[u0.min(u_blocks.len())..u1.min(u_blocks.len())],
+            &mut slice.dc,
+            &mut slice.ac,
+            dc_shift,
+        );
+        crate::codec::plane::encode_plane_from_blocks(
+            2,
+            strides[2],
+            &v_blocks[v0.min(v_blocks.len())..v1.min(v_blocks.len())],
+            &mut slice.dc,
+            &mut slice.ac,
+            dc_shift,
+        );
+        if let Some(a_blocks) = a_blocks {
+            let a0 = si * by_per_slice * a_bx;
+            let a1 = a0 + by_per_slice * a_bx;
+            crate::codec::plane::encode_plane_from_blocks(
+                3,
+                strides[3],
+                &a_blocks[a0.min(a_blocks.len())..a1.min(a_blocks.len())],
+                &mut slice.dc,
+                &mut slice.ac,
+                dc_shift,
+            );
+        }
+    }
+}

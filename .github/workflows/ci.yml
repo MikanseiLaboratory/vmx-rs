@@ -33,3 +33,18 @@ jobs:
           components: clippy
       - run: cargo clippy --all-targets -- -D warnings
       - run: cargo test
+
+  clippy-test-wgpu:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.97"
+          components: clippy
+      - run: cargo clippy --all-targets --features wgpu -- -D warnings
+      - run: cargo test --features wgpu

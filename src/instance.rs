@@ -46,34 +46,38 @@ impl Default for Config {
 }
 
 pub struct Codec {
-    size: Size,
+    pub(crate) size: Size,
     format: Format,
     #[allow(dead_code)]
     profile: Profile,
-    color_space: ColorSpace,
+    pub(crate) color_space: ColorSpace,
     quality: i32,
     min_quality: i32,
-    dc_shift: i32,
+    pub(crate) dc_shift: i32,
     /// Host CPU feature flags.
     capabilities: SimdCapabilities,
     /// DCT execution path selected at construction.
     simd_path: SimdPath,
     /// Color conversion path selected at construction.
     color_path: ColorSimdPath,
-    decode_presets: Vec<Vec<u16>>,
-    encode_presets: Vec<Vec<u16>>,
-    decode_matrix_idx: usize,
-    planes: PlaneBuffers,
-    slices: Vec<SliceSet>,
+    pub(crate) decode_presets: Vec<Vec<u16>>,
+    pub(crate) encode_presets: Vec<Vec<u16>>,
+    pub(crate) decode_matrix_idx: usize,
+    pub(crate) planes: PlaneBuffers,
+    pub(crate) slices: Vec<SliceSet>,
     slice_count: usize,
     #[allow(dead_code)]
     aligned_height: i32,
     target_bytes_min: i32,
     target_bytes_max: i32,
     pool: ThreadPool,
-    preview_size: Size,
-    image_format: ImageFormat,
+    pub(crate) preview_size: Size,
+    pub(crate) image_format: ImageFormat,
+    #[cfg(feature = "wgpu")]
+    pub(crate) gpu: Option<crate::gpu::GpuSession>,
 }
+
+// GPU methods live in `crate::gpu`.
 
 impl Codec {
     pub fn new(config: Config) -> Result<Self> {
@@ -214,6 +218,8 @@ impl Codec {
             pool: ThreadPool::new(threads),
             preview_size: Size::new(align_up(width >> 3, 2), height >> 3),
             image_format: ImageFormat::Uyvy,
+            #[cfg(feature = "wgpu")]
+            gpu: None,
         };
         codec.set_quality(80);
         let _ = ALIGNMENT;
@@ -452,7 +458,7 @@ impl Codec {
     }
 
     /// DC-only decode into internal planes (sparse 1/8 preview layout).
-    fn decode_planes_preview(&mut self) {
+    pub(crate) fn decode_planes_preview(&mut self) {
         for slice in self.slices.iter_mut() {
             slice.dc.pos = 0;
             slice.dc.bits_left = crate::types::BITS_SIZE;

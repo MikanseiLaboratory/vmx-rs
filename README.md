@@ -92,8 +92,10 @@ RUSTFLAGS="-C target-cpu=native" cargo build --profile release-fast
 
 Callers pass their existing `Device` / `Queue`. After `load_from`,
 `decode_to_texture` / `decode_preview_to_texture` produce a `Bgra8Unorm`
-texture (the API waits for GPU completion). `encode_from_texture` accepts
-`Bgra8Unorm` or `Rgba8Unorm` with `COPY_SRC` and is followed by `save_to`.
+texture and return after `queue.submit`. Later submits on the same queue can
+sample it; CPU readback still waits in `read_texture_bgra`.
+`encode_from_texture` accepts `Bgra8Unorm` or `Rgba8Unorm` with `COPY_SRC` and
+is followed by `save_to`.
 
 Decode IDCT is a float AAN on the GPU (same dequant scale as CPU, 8-bit clamp
 at store). When the adapter exposes `BGRA8UNORM_STORAGE`, the compute pass

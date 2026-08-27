@@ -22,7 +22,8 @@ pub struct GpuFrame {
     pub width: u32,
     /// Pixel height.
     pub height: u32,
-    /// Submit index; work is waited before return from decode APIs.
+    /// Submit index for this decode. Same-queue work after this submit can
+    /// sample [`Self::texture`]; CPU readback still waits via [`read_texture_bgra`].
     pub submission_index: wgpu::SubmissionIndex,
 }
 
@@ -644,6 +645,9 @@ impl Codec {
     }
 
     /// Decode the loaded bitstream into a BGRA texture on `device`.
+    ///
+    /// Returns after `queue.submit`. Later submits on the same queue can sample
+    /// the texture; CPU readback still waits in [`read_texture_bgra`].
     pub fn decode_to_texture(
         &mut self,
         device: &wgpu::Device,
@@ -678,10 +682,11 @@ impl Codec {
 
     /// Decode a 1/8 preview into a BGRA texture on `device`.
     ///
-    /// Preview is 1/8 resolution, so compute dispatch + GPU wait cannot beat
-    /// SIMD color convert. This path is CPU `decode_preview_bgra` plus
-    /// `queue.write_texture` into the ring texture (same work as the bench's
-    /// "CPU equivalent of GPU preview").
+    /// Preview is 1/8 resolution, so compute dispatch cannot beat SIMD color
+    /// convert. This path is CPU `decode_preview_bgra` plus `queue.write_texture`
+    /// into the ring texture (same work as the bench's "CPU equivalent of GPU
+    /// preview"). The upload is submitted; later work on the same queue can
+    /// sample the texture without a CPU wait.
     pub fn decode_preview_to_texture(
         &mut self,
         device: &wgpu::Device,
@@ -723,7 +728,6 @@ impl Codec {
         gpu.preview_cpu = preview_cpu;
         self.gpu = Some(gpu);
         let index = queue.submit([]);
-        wait(device, &index);
         Ok(GpuFrame {
             texture: tex,
             width: pw,
@@ -854,14 +858,11 @@ impl Codec {
             );
         }
         let index = queue.submit(Some(enc.finish()));
-        let t_wait = std::time::Instant::now();
-        wait(device, &index);
         if std::env::var_os("VMX_GPU_TRACE").is_some() {
             eprintln!(
-                "gpu_trace upload={:.3}ms encode={:.3}ms wait={:.3}ms storage={}",
+                "gpu_trace upload={:.3}ms encode={:.3}ms storage={}",
                 t_enc.duration_since(t_up).as_secs_f64() * 1e3,
-                t_wait.duration_since(t_enc).as_secs_f64() * 1e3,
-                t_wait.elapsed().as_secs_f64() * 1e3,
+                t_enc.elapsed().as_secs_f64() * 1e3,
                 gpu.storage_out
             );
         }

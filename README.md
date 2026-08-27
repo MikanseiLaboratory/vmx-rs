@@ -99,12 +99,7 @@ Decode IDCT is a float AAN on the GPU (same dequant scale as CPU, 8-bit clamp
 at store). When the adapter exposes `BGRA8UNORM_STORAGE`, the compute pass
 writes the output texture directly (no buffer→texture copy). Encode samples the
 source texture and keeps integer FDCT + VMX quant so the bitstream is valid
-VMX. Preview is 1/8 resolution, so it uses CPU SIMD + `write_texture` rather
-than a compute pass. One submit per frame, persistent buffers. LTO is already
-on in `release` / `release-fast`; that helps the CPU Golomb/pack side, not the
-shaders. Direct D3D12/Vulkan calls would not remove the entropy or readback
-costs that dominate vs SIMD.
-
+VMX.  
 ```bash
 cargo test --features wgpu
 cargo run --release --example gpu_bench --features wgpu

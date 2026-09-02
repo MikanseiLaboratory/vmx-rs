@@ -325,7 +325,7 @@ impl GpuSession {
         height: u32,
         preview_w: u32,
         preview_h: u32,
-    ) -> Self {
+    ) -> Result<Self> {
         let storage_out = device
             .features()
             .contains(wgpu::Features::BGRA8UNORM_STORAGE);
@@ -513,7 +513,7 @@ impl GpuSession {
             let mut data = enc_tables
                 .slice(..)
                 .get_mapped_range_mut()
-                .expect("enc-tables map");
+                .map_err(|e| gpu_err(format!("enc-tables map: {e}")))?;
             let mut tables = Vec::with_capacity(384);
             for t in [&FTAB1_128, &FTAB2_128, &FTAB3_128, &FTAB4_128] {
                 tables.extend(t.iter().map(|&v| i32::from(v)));
@@ -536,7 +536,7 @@ impl GpuSession {
             "coeff-read",
         );
 
-        Self {
+        Ok(Self {
             width,
             height,
             storage_out,
@@ -572,7 +572,7 @@ impl GpuSession {
             y_coeff_count,
             u_coeff_count,
             a_coeff_count,
-        }
+        })
     }
 }
 
@@ -630,7 +630,7 @@ fn can_sample_encode(texture: &wgpu::Texture) -> bool {
 }
 
 impl Codec {
-    fn ensure_gpu(&mut self, device: &wgpu::Device) {
+    fn ensure_gpu(&mut self, device: &wgpu::Device) -> Result<()> {
         let w = self.size.width as u32;
         let h = self.size.height as u32;
         let pw = self.preview_size.width as u32;
@@ -640,8 +640,9 @@ impl Codec {
             None => true,
         };
         if need {
-            self.gpu = Some(GpuSession::new(device, w, h, pw, ph));
+            self.gpu = Some(GpuSession::new(device, w, h, pw, ph)?);
         }
+        Ok(())
     }
 
     /// Decode the loaded bitstream into a BGRA texture on `device`.
@@ -653,7 +654,7 @@ impl Codec {
         device: &wgpu::Device,
         queue: &wgpu::Queue,
     ) -> Result<GpuFrame> {
-        self.ensure_gpu(device);
+        self.ensure_gpu(device)?;
         let strides = [
             self.planes.stride[0],
             self.planes.stride[1],
@@ -692,7 +693,7 @@ impl Codec {
         device: &wgpu::Device,
         queue: &wgpu::Queue,
     ) -> Result<GpuFrame> {
-        self.ensure_gpu(device);
+        self.ensure_gpu(device)?;
         let pw = self.preview_size.width as u32;
         let ph = self.preview_size.height as u32;
         let stride = pw as usize * 4;
@@ -771,7 +772,7 @@ impl Codec {
             self.image_format = crate::types::ImageFormat::Bgra;
             return self.encode_bgra(&pixels, w as usize * 4);
         }
-        self.ensure_gpu(device);
+        self.ensure_gpu(device)?;
         self.image_format = crate::types::ImageFormat::Bgra;
         self.dispatch_encode(device, queue, texture)
     }
@@ -994,7 +995,7 @@ impl Codec {
             u_n,
             a_n,
             self.dc_shift,
-        );
+        )?;
         Ok(())
     }
 }
@@ -1008,16 +1009,19 @@ fn encode_from_mapped(
     u_n: usize,
     a_n: usize,
     dc_shift: i32,
-) {
+) -> Result<()> {
     let slice = buf.slice(..);
     slice.map_async(wgpu::MapMode::Read, |_| {});
     let _ = device.poll(wgpu::PollType::wait_indefinitely());
     {
-        let data = slice.get_mapped_range().expect("coeff map");
+        let data = slice
+            .get_mapped_range()
+            .map_err(|e| gpu_err(format!("coeff map: {e}")))?;
         let vals: &[i16] = bytemuck::cast_slice(&data);
         encode_slices_from_coeffs(slices, strides, vals, y_n, u_n, a_n, dc_shift);
     }
     buf.unmap();
+    Ok(())
 }
 
 /// Read a BGRA texture back to tightly packed CPU bytes (tests / bench).
@@ -1064,7 +1068,9 @@ pub fn read_texture_bgra(
     let slice = buf.slice(..);
     slice.map_async(wgpu::MapMode::Read, |_| {});
     let _ = device.poll(wgpu::PollType::wait_indefinitely());
-    let data = slice.get_mapped_range().expect("readback map");
+    let data = slice
+        .get_mapped_range()
+        .map_err(|e| gpu_err(format!("readback map: {e}")))?;
     let mut out = vec![0u8; (width * height * 4) as usize];
     let row = (width * 4) as usize;
     for y in 0..height as usize {

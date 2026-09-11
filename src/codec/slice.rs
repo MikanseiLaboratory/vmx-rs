@@ -402,12 +402,17 @@ pub fn encode_slices_from_coeffs(
     let y_blocks = i16_as_blocks(&coeffs[..y_n]);
     let u_blocks = i16_as_blocks(&coeffs[y_n..y_n + u_n]);
     let v_blocks = i16_as_blocks(&coeffs[y_n + u_n..y_n + u_n * 2]);
-    let a_blocks = i16_as_blocks(&coeffs[y_n + u_n * 2..y_n + u_n * 2 + a_n]);
+    let a_blocks = if a_n == 0 {
+        &[]
+    } else {
+        i16_as_blocks(&coeffs[y_n + u_n * 2..y_n + u_n * 2 + a_n])
+    };
     let y_bx = strides[0] / 8;
     let u_bx = strides[1] / 8;
     let v_bx = strides[2] / 8;
     let a_bx = strides[3] / 8;
     let by_per_slice = (SLICE_HEIGHT as usize) / 8;
+    let encode_alpha = a_n > 0;
 
     slices.par_iter_mut().enumerate().for_each(|(si, slice)| {
         slice.reset();
@@ -441,15 +446,219 @@ pub fn encode_slices_from_coeffs(
             &mut slice.ac,
             dc_shift,
         );
-        let a0 = si * by_per_slice * a_bx;
-        let a1 = a0 + by_per_slice * a_bx;
-        crate::codec::plane::encode_plane_from_blocks(
-            3,
-            strides[3],
-            &a_blocks[a0.min(a_blocks.len())..a1.min(a_blocks.len())],
-            &mut slice.dc,
-            &mut slice.ac,
-            dc_shift,
-        );
+        if encode_alpha {
+            let a0 = si * by_per_slice * a_bx;
+            let a1 = a0 + by_per_slice * a_bx;
+            crate::codec::plane::encode_plane_from_blocks(
+                3,
+                strides[3],
+                &a_blocks[a0.min(a_blocks.len())..a1.min(a_blocks.len())],
+                &mut slice.dc,
+                &mut slice.ac,
+                dc_shift,
+            );
+        }
     });
+}
+
+/// Per-slice BGRA→YUV convert + encode (cache-friendly, parallel color convert).
+pub fn encode_slices_fused_bgra(
+    path: SimdPath,
+    color_path: crate::color::simd::ColorSimdPath,
+    planes: &mut PlaneBuffers,
+    slices: &mut [SliceSet],
+    encode_matrix: &[u16],
+    dc_shift: i32,
+    pool: Option<&ThreadPool>,
+    src: &[u8],
+    src_stride: usize,
+    width: i32,
+    table: &[crate::tables::ShortRgb; 3],
+    include_alpha: bool,
+) {
+    let plane_count = if include_alpha { 4 } else { 3 };
+    let plane_ptrs = [
+        planes.data[0].as_mut_ptr() as usize,
+        planes.data[1].as_mut_ptr() as usize,
+        planes.data[2].as_mut_ptr() as usize,
+        planes.data[3].as_mut_ptr() as usize,
+    ];
+    let plane_lens = [
+        planes.data[0].len(),
+        planes.data[1].len(),
+        planes.data[2].len(),
+        planes.data[3].len(),
+    ];
+    let strides = [
+        planes.stride[0],
+        planes.stride[1],
+        planes.stride[2],
+        planes.stride[3],
+    ];
+    let y_stride = planes.stride[0];
+    let src_ptr = src.as_ptr() as usize;
+    let src_len = src.len();
+
+    let encode_chunk = |chunk: &mut [SliceSet]| {
+        for slice in chunk.iter_mut() {
+            slice.reset();
+            let y_row0 = slice.offset[0] / y_stride;
+            let rows = slice.pixel_height.max(0) as usize;
+            let src_off = y_row0.saturating_mul(src_stride);
+            // SAFETY: each slice writes a disjoint plane band; src is read-only.
+            let src_band = unsafe {
+                let avail = src_len.saturating_sub(src_off);
+                std::slice::from_raw_parts((src_ptr as *const u8).add(src_off), avail)
+            };
+            let y =
+                unsafe { std::slice::from_raw_parts_mut(plane_ptrs[0] as *mut u8, plane_lens[0]) };
+            let u =
+                unsafe { std::slice::from_raw_parts_mut(plane_ptrs[1] as *mut u8, plane_lens[1]) };
+            let v =
+                unsafe { std::slice::from_raw_parts_mut(plane_ptrs[2] as *mut u8, plane_lens[2]) };
+            let a =
+                unsafe { std::slice::from_raw_parts_mut(plane_ptrs[3] as *mut u8, plane_lens[3]) };
+            crate::color::convert::bgra_to_yuv4224_with_path(
+                color_path,
+                src_band,
+                src_stride,
+                &mut y[slice.offset[0]..],
+                strides[0],
+                &mut u[slice.offset[1]..],
+                strides[1],
+                &mut v[slice.offset[2]..],
+                strides[2],
+                &mut a[slice.offset[3]..],
+                strides[3],
+                crate::types::Size::new(width, rows as i32),
+                table,
+            );
+            for pi in 0..plane_count {
+                let data = unsafe {
+                    std::slice::from_raw_parts_mut(plane_ptrs[pi] as *mut u8, plane_lens[pi])
+                };
+                encode_plane(
+                    path,
+                    &PlaneView {
+                        index: pi,
+                        data,
+                        stride: strides[pi],
+                        offset: slice.offset[pi],
+                    },
+                    &mut slice.dc,
+                    &mut slice.ac,
+                    encode_matrix,
+                    dc_shift,
+                    &mut slice.temp_block,
+                );
+            }
+        }
+    };
+
+    match pool {
+        Some(pool) if pool.thread_count() > 1 && slices.len() > 1 => {
+            pool.parallel_chunks_mut(slices, encode_chunk);
+        }
+        _ => encode_chunk(slices),
+    }
+}
+
+/// Per-slice packed 4:2:2 convert + encode (`UYVY` / `YUY2`).
+pub fn encode_slices_fused_packed422(
+    path: SimdPath,
+    planes: &mut PlaneBuffers,
+    slices: &mut [SliceSet],
+    encode_matrix: &[u16],
+    dc_shift: i32,
+    pool: Option<&ThreadPool>,
+    src: &[u8],
+    src_stride: usize,
+    width: i32,
+    yuy2: bool,
+) {
+    let plane_ptrs = [
+        planes.data[0].as_mut_ptr() as usize,
+        planes.data[1].as_mut_ptr() as usize,
+        planes.data[2].as_mut_ptr() as usize,
+    ];
+    let plane_lens = [
+        planes.data[0].len(),
+        planes.data[1].len(),
+        planes.data[2].len(),
+    ];
+    let strides = [planes.stride[0], planes.stride[1], planes.stride[2]];
+    let y_stride = planes.stride[0];
+    let src_ptr = src.as_ptr() as usize;
+    let src_len = src.len();
+
+    let encode_chunk = |chunk: &mut [SliceSet]| {
+        for slice in chunk.iter_mut() {
+            slice.reset();
+            let y_row0 = slice.offset[0] / y_stride;
+            let rows = slice.pixel_height.max(0) as usize;
+            let src_off = y_row0.saturating_mul(src_stride);
+            let src_band = unsafe {
+                let avail = src_len.saturating_sub(src_off);
+                std::slice::from_raw_parts((src_ptr as *const u8).add(src_off), avail)
+            };
+            let y =
+                unsafe { std::slice::from_raw_parts_mut(plane_ptrs[0] as *mut u8, plane_lens[0]) };
+            let u =
+                unsafe { std::slice::from_raw_parts_mut(plane_ptrs[1] as *mut u8, plane_lens[1]) };
+            let v =
+                unsafe { std::slice::from_raw_parts_mut(plane_ptrs[2] as *mut u8, plane_lens[2]) };
+            let size = crate::types::Size::new(width, rows as i32);
+            if yuy2 {
+                crate::color::convert::yuy2_to_planar(
+                    src_band,
+                    src_stride,
+                    &mut y[slice.offset[0]..],
+                    strides[0],
+                    &mut u[slice.offset[1]..],
+                    strides[1],
+                    &mut v[slice.offset[2]..],
+                    strides[2],
+                    size,
+                );
+            } else {
+                crate::color::convert::uyvy_to_planar(
+                    src_band,
+                    src_stride,
+                    &mut y[slice.offset[0]..],
+                    strides[0],
+                    &mut u[slice.offset[1]..],
+                    strides[1],
+                    &mut v[slice.offset[2]..],
+                    strides[2],
+                    size,
+                );
+            }
+            for pi in 0..3 {
+                let data = unsafe {
+                    std::slice::from_raw_parts_mut(plane_ptrs[pi] as *mut u8, plane_lens[pi])
+                };
+                encode_plane(
+                    path,
+                    &PlaneView {
+                        index: pi,
+                        data,
+                        stride: strides[pi],
+                        offset: slice.offset[pi],
+                    },
+                    &mut slice.dc,
+                    &mut slice.ac,
+                    encode_matrix,
+                    dc_shift,
+                    &mut slice.temp_block,
+                );
+            }
+        }
+    };
+
+    match pool {
+        Some(pool) if pool.thread_count() > 1 && slices.len() > 1 => {
+            pool.parallel_chunks_mut(slices, encode_chunk);
+        }
+        _ => encode_chunk(slices),
+    }
 }

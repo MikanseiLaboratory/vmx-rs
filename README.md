@@ -95,7 +95,13 @@ Callers pass their existing `Device` / `Queue`. After `load_from`,
 texture and return after `queue.submit`. Later submits on the same queue can
 sample it; CPU readback still waits in `read_texture_bgra`.
 `encode_from_texture` accepts `Bgra8Unorm` or `Rgba8Unorm` with `COPY_SRC` and
-is followed by `save_to`.
+is followed by `save_to`. Use `encode_from_texture_opaque` to skip the alpha
+plane (libvmx `EncodeBGRX`). `encode_from_texture_submit` /
+`encode_submitted_finish` pipeline GPU FDCT against CPU entropy coding.
+
+CPU encode also has slice-fused entry points (`encode_bgra_fused`,
+`encode_bgrx_fused`, `encode_uyvy_fused`, `encode_yuy2_fused`) that convert
+and FDCT per slice. `encode_bgrx` encodes three planes only.
 
 Decode IDCT is a float AAN on the GPU (same dequant scale as CPU, 8-bit clamp
 at store). When the adapter exposes `BGRA8UNORM_STORAGE`, the compute pass

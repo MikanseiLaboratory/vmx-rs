@@ -163,8 +163,14 @@ struct FusedParams {
     v_word_off: u32,
 }
 
+#[derive(Clone, Copy)]
+struct PendingGpuEncode {
+    slot: usize,
+    include_alpha: bool,
+}
+
 #[repr(C)]
-#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+#[derive(Clone, Copy, PartialEq, Eq, bytemuck::Pod, bytemuck::Zeroable)]
 struct EncodeParams {
     width: u32,
     height: u32,
@@ -228,7 +234,10 @@ pub(crate) struct GpuSession {
     enc_ubo: wgpu::Buffer,
     enc_tables: wgpu::Buffer,
     coeffs: wgpu::Buffer,
-    coeff_read: wgpu::Buffer,
+    coeff_read: Vec<wgpu::Buffer>,
+    enc_ring: usize,
+    pending_encode: Option<PendingGpuEncode>,
+    last_enc_params: Option<EncodeParams>,
     last_enc_matrix_idx: Option<usize>,
     y_coeff_count: u32,
     u_coeff_count: u32,
@@ -529,12 +538,16 @@ impl GpuSession {
             wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
             "coeffs",
         );
-        let coeff_read = buf(
-            device,
-            u64::from(coeff_i16) * 2,
-            wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
-            "coeff-read",
-        );
+        let coeff_read = (0..RING)
+            .map(|i| {
+                buf(
+                    device,
+                    u64::from(coeff_i16) * 2,
+                    wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+                    &format!("coeff-read-{i}"),
+                )
+            })
+            .collect();
 
         Ok(Self {
             width,
@@ -568,6 +581,9 @@ impl GpuSession {
             enc_tables,
             coeffs,
             coeff_read,
+            enc_ring: 0,
+            pending_encode: None,
+            last_enc_params: None,
             last_enc_matrix_idx: None,
             y_coeff_count,
             u_coeff_count,
@@ -737,13 +753,82 @@ impl Codec {
         })
     }
 
-    /// Encode a BGRA (or RGBA) texture already on `device`. Follow with [`Codec::save_to`].
+    /// Encode a BGRA (or RGBA) texture already on `device`, including the alpha plane.
+    /// Follow with [`Codec::save_to`].
     pub fn encode_from_texture(
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         texture: &wgpu::Texture,
     ) -> Result<()> {
+        self.encode_from_texture_planes(device, queue, texture, true)
+    }
+
+    /// Encode a BGRA (or RGBA) texture without the alpha plane (`BGRX` / libvmx).
+    /// Follow with [`Codec::save_to`].
+    pub fn encode_from_texture_opaque(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        texture: &wgpu::Texture,
+    ) -> Result<()> {
+        self.encode_from_texture_planes(device, queue, texture, false)
+    }
+
+    /// Submit GPU FDCT+quant for `texture` and return immediately.
+    /// Pair with [`Self::encode_submitted_finish`] (or call
+    /// [`Self::encode_from_texture`] for the synchronous path).
+    pub fn encode_from_texture_submit(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        texture: &wgpu::Texture,
+        include_alpha: bool,
+    ) -> Result<()> {
+        self.validate_encode_texture(texture)?;
+        if !can_sample_encode(texture) {
+            if !texture.usage().contains(wgpu::TextureUsages::COPY_SRC) {
+                return Err(gpu_err("texture must have TEXTURE_BINDING or COPY_SRC"));
+            }
+            self.encode_submitted_finish(device)?;
+            let w = texture.size().width;
+            let h = texture.size().height;
+            let pixels = read_texture_bgra(device, queue, texture, w, h)?;
+            return if include_alpha {
+                self.image_format = crate::types::ImageFormat::Bgra;
+                self.encode_bgra(&pixels, w as usize * 4)
+            } else {
+                self.image_format = crate::types::ImageFormat::Bgrx;
+                self.encode_bgrx(&pixels, w as usize * 4)
+            };
+        }
+        self.ensure_gpu(device)?;
+        self.image_format = if include_alpha {
+            crate::types::ImageFormat::Bgra
+        } else {
+            crate::types::ImageFormat::Bgrx
+        };
+        self.dispatch_encode_submit(device, queue, texture, include_alpha)
+    }
+
+    /// Finish a previous [`Self::encode_from_texture_submit`]: map coefficients
+    /// and Golomb-encode slices. No-op when nothing is in flight.
+    pub fn encode_submitted_finish(&mut self, device: &wgpu::Device) -> Result<()> {
+        self.dispatch_encode_finish(device)
+    }
+
+    fn encode_from_texture_planes(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        texture: &wgpu::Texture,
+        include_alpha: bool,
+    ) -> Result<()> {
+        self.encode_from_texture_submit(device, queue, texture, include_alpha)?;
+        self.encode_submitted_finish(device)
+    }
+
+    fn validate_encode_texture(&self, texture: &wgpu::Texture) -> Result<()> {
         let desc = texture.size();
         if desc.width != self.size.width as u32 || desc.height != self.size.height as u32 {
             return Err(gpu_err(format!(
@@ -755,26 +840,11 @@ impl Codec {
             wgpu::TextureFormat::Bgra8Unorm
             | wgpu::TextureFormat::Bgra8UnormSrgb
             | wgpu::TextureFormat::Rgba8Unorm
-            | wgpu::TextureFormat::Rgba8UnormSrgb => {}
-            other => {
-                return Err(gpu_err(format!(
-                    "unsupported texture format {other:?} (need Bgra8Unorm or Rgba8Unorm)"
-                )));
-            }
+            | wgpu::TextureFormat::Rgba8UnormSrgb => Ok(()),
+            other => Err(gpu_err(format!(
+                "unsupported texture format {other:?} (need Bgra8Unorm or Rgba8Unorm)"
+            ))),
         }
-        if !can_sample_encode(texture) {
-            if !texture.usage().contains(wgpu::TextureUsages::COPY_SRC) {
-                return Err(gpu_err("texture must have TEXTURE_BINDING or COPY_SRC"));
-            }
-            let w = desc.width;
-            let h = desc.height;
-            let pixels = read_texture_bgra(device, queue, texture, w, h)?;
-            self.image_format = crate::types::ImageFormat::Bgra;
-            return self.encode_bgra(&pixels, w as usize * 4);
-        }
-        self.ensure_gpu(device)?;
-        self.image_format = crate::types::ImageFormat::Bgra;
-        self.dispatch_encode(device, queue, texture)
     }
 
     fn dispatch_decode(
@@ -875,12 +945,17 @@ impl Codec {
         })
     }
 
-    fn dispatch_encode(
+    fn dispatch_encode_submit(
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         texture: &wgpu::Texture,
+        include_alpha: bool,
     ) -> Result<()> {
+        if self.gpu.as_ref().and_then(|g| g.pending_encode).is_some() {
+            self.dispatch_encode_finish(device)?;
+        }
+        let t0 = std::time::Instant::now();
         let w = self.size.width as u32;
         let h = self.size.height as u32;
         let y_stride = self.planes.stride[0] as u32;
@@ -929,7 +1004,10 @@ impl Codec {
             a_coeff_off: gpu.y_coeff_count + gpu.u_coeff_count * 2,
             src_rgba: 0,
         };
-        write_pod(queue, &gpu.enc_ubo, &ep);
+        if gpu.last_enc_params != Some(ep) {
+            write_pod(queue, &gpu.enc_ubo, &ep);
+            gpu.last_enc_params = Some(ep);
+        }
 
         let idx = self.decode_matrix_idx;
         if gpu.last_enc_matrix_idx != Some(idx) {
@@ -956,6 +1034,8 @@ impl Codec {
             ],
         });
 
+        gpu.enc_ring = (gpu.enc_ring + 1) % gpu.coeff_read.len().max(1);
+        let slot = gpu.enc_ring;
         let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("vmx-encode"),
         });
@@ -971,19 +1051,46 @@ impl Codec {
             pass.dispatch_workgroups((u_bx * u_by).div_ceil(64).max(1), 1, 1);
             pass.set_pipeline(&gpu.fdct_v_pipeline);
             pass.dispatch_workgroups((u_bx * u_by).div_ceil(64).max(1), 1, 1);
-            pass.set_pipeline(&gpu.fdct_a_pipeline);
-            pass.dispatch_workgroups((y_bx * y_by).div_ceil(64).max(1), 1, 1);
+            if include_alpha {
+                pass.set_pipeline(&gpu.fdct_a_pipeline);
+                pass.dispatch_workgroups((y_bx * y_by).div_ceil(64).max(1), 1, 1);
+            }
         }
-        let bytes = u64::from(gpu.y_coeff_count + gpu.u_coeff_count * 2 + gpu.a_coeff_count) * 2;
-        enc.copy_buffer_to_buffer(&gpu.coeffs, 0, &gpu.coeff_read, 0, bytes.max(4));
+        let coeff_count = gpu.y_coeff_count
+            + gpu.u_coeff_count * 2
+            + if include_alpha { gpu.a_coeff_count } else { 0 };
+        let bytes = u64::from(coeff_count) * 2;
+        enc.copy_buffer_to_buffer(&gpu.coeffs, 0, &gpu.coeff_read[slot], 0, bytes.max(4));
         queue.submit(Some(enc.finish()));
+        gpu.pending_encode = Some(PendingGpuEncode {
+            slot,
+            include_alpha,
+        });
+        if std::env::var_os("VMX_GPU_TRACE").is_some() {
+            eprintln!(
+                "gpu_trace encode_submit={:.3}ms alpha={include_alpha} bytes={bytes}",
+                t0.elapsed().as_secs_f64() * 1e3
+            );
+        }
+        Ok(())
+    }
 
+    fn dispatch_encode_finish(&mut self, device: &wgpu::Device) -> Result<()> {
+        let Some(pending) = self.gpu.as_mut().and_then(|g| g.pending_encode.take()) else {
+            return Ok(());
+        };
+        let t0 = std::time::Instant::now();
+        let gpu = self.gpu.as_mut().ok_or_else(|| gpu_err("gpu session"))?;
         let y_n = gpu.y_coeff_count as usize;
         let u_n = gpu.u_coeff_count as usize;
-        let a_n = gpu.a_coeff_count as usize;
+        let a_n = if pending.include_alpha {
+            gpu.a_coeff_count as usize
+        } else {
+            0
+        };
         encode_from_mapped(
             device,
-            &gpu.coeff_read,
+            &gpu.coeff_read[pending.slot],
             &mut self.slices,
             [
                 self.planes.stride[0],
@@ -996,6 +1103,12 @@ impl Codec {
             a_n,
             self.dc_shift,
         )?;
+        if std::env::var_os("VMX_GPU_TRACE").is_some() {
+            eprintln!(
+                "gpu_trace encode_finish={:.3}ms y={y_n} u={u_n} a={a_n}",
+                t0.elapsed().as_secs_f64() * 1e3
+            );
+        }
         Ok(())
     }
 }

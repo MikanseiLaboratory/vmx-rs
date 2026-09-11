@@ -348,11 +348,38 @@ fn bench_resolution(
         .expect("gpu encode warmup");
 
     report(
-        "GPU encode_from_texture",
+        "GPU encode_from_texture (4-plane / alpha)",
         timed_iters(warmup, iters, || {
             gpu_enc
                 .encode_from_texture(device, queue, &src_tex)
                 .expect("gpu encode");
+        }),
+    );
+    report(
+        "GPU encode_from_texture_opaque (3-plane)",
+        timed_iters(warmup, iters, || {
+            gpu_enc
+                .encode_from_texture_opaque(device, queue, &src_tex)
+                .expect("gpu opaque");
+        }),
+    );
+
+    let t_submit = std::time::Instant::now();
+    gpu_enc
+        .encode_from_texture_submit(device, queue, &src_tex, false)
+        .expect("submit");
+    let submit_ms = t_submit.elapsed().as_secs_f64() * 1e3;
+    let t_finish = std::time::Instant::now();
+    gpu_enc.encode_submitted_finish(device).expect("finish");
+    let finish_ms = t_finish.elapsed().as_secs_f64() * 1e3;
+    println!(
+        "GPU pipeline split (opaque, 1 sample): submit={submit_ms:.3} ms finish={finish_ms:.3} ms"
+    );
+
+    report(
+        "CPU encode_bgrx (3-plane)",
+        timed_iters(warmup, iters, || {
+            enc.encode_bgrx(&bgra, stride).expect("cpu bgrx");
         }),
     );
 }

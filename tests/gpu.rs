@@ -169,6 +169,84 @@ fn gpu_encode_roundtrip_quality() {
 }
 
 #[test]
+fn gpu_opaque_encode_matches_cpu_bgrx() {
+    let Some((device, queue)) = device() else {
+        eprintln!("skip: no wgpu adapter");
+        return;
+    };
+    let width = 32i32;
+    let height = 32i32;
+    let stride = width as usize * 4;
+    let src = sample_bgra(width, height);
+
+    let mut cpu = Codec::new(Config {
+        width,
+        height,
+        profile: Profile::OmtHq,
+        color_space: Default::default(),
+    })
+    .unwrap();
+    cpu.encode_bgrx(&src, stride).unwrap();
+    let mut cpu_bs = vec![0u8; 1 << 20];
+    let cpu_len = cpu.save_to(&mut cpu_bs).unwrap();
+    let mut cpu_dec = Codec::new(Config::new(width, height)).unwrap();
+    cpu_dec.load_from(&cpu_bs[..cpu_len]).unwrap();
+    let mut cpu_out = vec![0u8; stride * height as usize];
+    cpu_dec.decode_bgra(&mut cpu_out, stride).unwrap();
+
+    let tex = gpu::upload_bgra_texture(&device, &queue, width as u32, height as u32, &src);
+    let mut gpu_enc = Codec::new(Config {
+        width,
+        height,
+        profile: Profile::OmtHq,
+        color_space: Default::default(),
+    })
+    .unwrap();
+    gpu_enc
+        .encode_from_texture_opaque(&device, &queue, &tex)
+        .unwrap();
+    let mut gpu_bs = vec![0u8; 1 << 20];
+    let gpu_len = gpu_enc.save_to(&mut gpu_bs).unwrap();
+    let mut gpu_dec = Codec::new(Config::new(width, height)).unwrap();
+    gpu_dec.load_from(&gpu_bs[..gpu_len]).unwrap();
+    let mut gpu_out = vec![0u8; stride * height as usize];
+    gpu_dec.decode_bgra(&mut gpu_out, stride).unwrap();
+    assert_psnr(
+        &cpu_out,
+        &gpu_out,
+        35.0,
+        "GPU opaque encode vs CPU BGRX (CPU decode)",
+    );
+}
+
+#[test]
+fn gpu_encode_submit_finish_matches_sync() {
+    let Some((device, queue)) = device() else {
+        eprintln!("skip: no wgpu adapter");
+        return;
+    };
+    let width = 32i32;
+    let height = 32i32;
+    let src = sample_bgra(width, height);
+    let tex = gpu::upload_bgra_texture(&device, &queue, width as u32, height as u32, &src);
+
+    let mut sync = Codec::new(Config::new(width, height)).unwrap();
+    sync.encode_from_texture_opaque(&device, &queue, &tex)
+        .unwrap();
+    let mut sync_bs = vec![0u8; 1 << 20];
+    let sync_len = sync.save_to(&mut sync_bs).unwrap();
+
+    let mut piped = Codec::new(Config::new(width, height)).unwrap();
+    piped
+        .encode_from_texture_submit(&device, &queue, &tex, false)
+        .unwrap();
+    piped.encode_submitted_finish(&device).unwrap();
+    let mut piped_bs = vec![0u8; 1 << 20];
+    let piped_len = piped.save_to(&mut piped_bs).unwrap();
+    assert_eq!(&sync_bs[..sync_len], &piped_bs[..piped_len]);
+}
+
+#[test]
 fn gpu_idct_single_block_quality() {
     let Some((device, queue)) = device() else {
         eprintln!("skip: no wgpu adapter");

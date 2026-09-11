@@ -24,6 +24,9 @@ pub struct GpuFrame {
     pub height: u32,
     /// Submit index for this decode. Same-queue work after this submit can
     /// sample [`Self::texture`]; CPU readback still waits via [`read_texture_bgra`].
+    ///
+    /// The texture is written once and not reused by later decodes. Hold it
+    /// across frames without copying.
     pub submission_index: wgpu::SubmissionIndex,
 }
 
@@ -218,14 +221,11 @@ pub(crate) struct GpuSession {
     has_matrix: bool,
     fused_ubo: wgpu::Buffer,
     fused_pipeline: wgpu::ComputePipeline,
+    fused_layout: wgpu::BindGroupLayout,
     fused_binds: Vec<wgpu::BindGroup>,
     bgra_buf: Option<wgpu::Buffer>,
     pack: Vec<u8>,
-    textures: Vec<wgpu::Texture>,
-    preview_textures: Vec<wgpu::Texture>,
     preview_cpu: Vec<u8>,
-    ring: usize,
-    preview_ring: usize,
     encode_layout: wgpu::BindGroupLayout,
     fdct_y_pipeline: wgpu::ComputePipeline,
     fdct_u_pipeline: wgpu::ComputePipeline,
@@ -332,7 +332,7 @@ impl GpuSession {
         device: &wgpu::Device,
         width: u32,
         height: u32,
-        preview_w: u32,
+        _preview_w: u32,
         preview_h: u32,
     ) -> Result<Self> {
         let storage_out = device
@@ -460,33 +460,8 @@ impl GpuSession {
             ))
         };
 
-        let textures = (0..RING)
-            .map(|_| make_bgra_texture(device, width, height, storage_out))
-            .collect::<Vec<_>>();
-        let preview_textures = (0..RING)
-            .map(|_| make_bgra_texture(device, preview_w.max(2), preview_h.max(2), false))
-            .collect::<Vec<_>>();
-
         let fused_binds = if storage_out {
-            textures
-                .iter()
-                .map(|tex| {
-                    let view = tex.create_view(&wgpu::TextureViewDescriptor::default());
-                    device.create_bind_group(&wgpu::BindGroupDescriptor {
-                        label: Some("fused-tex-bg"),
-                        layout: &fused_layout,
-                        entries: &[
-                            bind(0, &fused_ubo),
-                            bind(1, &matrix_buf),
-                            bind(2, &coeff_in),
-                            wgpu::BindGroupEntry {
-                                binding: 3,
-                                resource: wgpu::BindingResource::TextureView(&view),
-                            },
-                        ],
-                    })
-                })
-                .collect()
+            Vec::new()
         } else {
             let bgra = bgra_buf.as_ref().expect("buf path");
             vec![device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -564,14 +539,11 @@ impl GpuSession {
             has_matrix: false,
             fused_ubo,
             fused_pipeline,
+            fused_layout,
             fused_binds,
             bgra_buf,
             pack: Vec::new(),
-            textures,
-            preview_textures,
             preview_cpu: Vec::new(),
-            ring: 0,
-            preview_ring: 0,
             encode_layout,
             fdct_y_pipeline,
             fdct_u_pipeline,
@@ -620,6 +592,30 @@ fn make_bgra_texture(
     })
 }
 
+fn decode_storage_bind(
+    device: &wgpu::Device,
+    layout: &wgpu::BindGroupLayout,
+    fused_ubo: &wgpu::Buffer,
+    matrix_buf: &wgpu::Buffer,
+    coeff_in: &wgpu::Buffer,
+    tex: &wgpu::Texture,
+) -> wgpu::BindGroup {
+    let view = tex.create_view(&wgpu::TextureViewDescriptor::default());
+    device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("fused-tex-bg"),
+        layout,
+        entries: &[
+            bind(0, fused_ubo),
+            bind(1, matrix_buf),
+            bind(2, coeff_in),
+            wgpu::BindGroupEntry {
+                binding: 3,
+                resource: wgpu::BindingResource::TextureView(&view),
+            },
+        ],
+    })
+}
+
 fn gpu_err(msg: impl Into<String>) -> VmxError {
     VmxError::Gpu(msg.into())
 }
@@ -663,8 +659,9 @@ impl Codec {
 
     /// Decode the loaded bitstream into a BGRA texture on `device`.
     ///
-    /// Returns after `queue.submit`. Later submits on the same queue can sample
-    /// the texture; CPU readback still waits in [`read_texture_bgra`].
+    /// Returns after `queue.submit`. The texture is not reused by later
+    /// decodes. Later submits on the same queue can sample it; CPU readback
+    /// still waits in [`read_texture_bgra`].
     pub fn decode_to_texture(
         &mut self,
         device: &wgpu::Device,
@@ -721,8 +718,7 @@ impl Codec {
         self.decode_preview_bgra(&mut preview_cpu, stride)?;
 
         let mut gpu = self.gpu.take().expect("gpu");
-        gpu.preview_ring = (gpu.preview_ring + 1) % RING;
-        let tex = gpu.preview_textures[gpu.preview_ring].clone();
+        let tex = make_bgra_texture(device, pw, ph, false);
         queue.write_texture(
             wgpu::TexelCopyTextureInfo {
                 texture: &tex,
@@ -888,9 +884,17 @@ impl Codec {
         };
         write_pod(queue, &gpu.fused_ubo, &fused);
 
-        gpu.ring = (gpu.ring + 1) % RING;
-        let tex = gpu.textures[gpu.ring].clone();
-        let bind_idx = if gpu.storage_out { gpu.ring } else { 0 };
+        let tex = make_bgra_texture(device, w, h, gpu.storage_out);
+        let tex_bind = gpu.storage_out.then(|| {
+            decode_storage_bind(
+                device,
+                &gpu.fused_layout,
+                &gpu.fused_ubo,
+                &gpu.matrix_buf,
+                &gpu.coeff_in,
+                &tex,
+            )
+        });
         let tiles = gpu.u_blocks_x.saturating_mul(gpu.u_blocks_y).max(1);
 
         let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -902,7 +906,11 @@ impl Codec {
                 timestamp_writes: None,
             });
             pass.set_pipeline(&gpu.fused_pipeline);
-            pass.set_bind_group(0, &gpu.fused_binds[bind_idx], &[]);
+            if let Some(bind) = tex_bind.as_ref() {
+                pass.set_bind_group(0, bind, &[]);
+            } else {
+                pass.set_bind_group(0, &gpu.fused_binds[0], &[]);
+            }
             pass.dispatch_workgroups(tiles, 1, 1);
         }
         if let Some(bgra) = gpu.bgra_buf.as_ref() {

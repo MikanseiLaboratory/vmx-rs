@@ -120,6 +120,69 @@ fn gpu_preview_matches_cpu_quality() {
 }
 
 #[test]
+fn gpu_decode_does_not_overwrite_returned_texture() {
+    let Some((device, queue)) = device() else {
+        eprintln!("skip: no wgpu adapter");
+        return;
+    };
+    let width = 64i32;
+    let height = 64i32;
+    let stride = width as usize * 4;
+    let src_a = sample_bgra(width, height);
+    let src_b: Vec<u8> = src_a.iter().map(|b| b.wrapping_add(90)).collect();
+
+    let encode = |src: &[u8]| {
+        let mut enc = Codec::new(Config {
+            width,
+            height,
+            profile: Profile::OmtHq,
+            color_space: Default::default(),
+        })
+        .unwrap();
+        enc.encode_bgra(src, stride).unwrap();
+        let mut bitstream = vec![0u8; 2 << 20];
+        let len = enc.save_to(&mut bitstream).unwrap();
+        bitstream.truncate(len);
+        bitstream
+    };
+    let a_bs = encode(&src_a);
+    let b_bs = encode(&src_b);
+
+    let mut dec = Codec::new(Config::new(width, height)).unwrap();
+    dec.load_from(&a_bs).unwrap();
+    let frame_a = dec.decode_to_texture(&device, &queue).unwrap();
+    dec.load_from(&b_bs).unwrap();
+    let frame_b = dec.decode_to_texture(&device, &queue).unwrap();
+
+    let mut cpu = Codec::new(Config::new(width, height)).unwrap();
+    cpu.load_from(&a_bs).unwrap();
+    let mut cpu_a = vec![0u8; stride * height as usize];
+    cpu.decode_bgra(&mut cpu_a, stride).unwrap();
+    cpu.load_from(&b_bs).unwrap();
+    let mut cpu_b = vec![0u8; stride * height as usize];
+    cpu.decode_bgra(&mut cpu_b, stride).unwrap();
+
+    let gpu_a = gpu::read_texture_bgra(
+        &device,
+        &queue,
+        &frame_a.texture,
+        frame_a.width,
+        frame_a.height,
+    )
+    .unwrap();
+    let gpu_b = gpu::read_texture_bgra(
+        &device,
+        &queue,
+        &frame_b.texture,
+        frame_b.width,
+        frame_b.height,
+    )
+    .unwrap();
+    assert_psnr(&cpu_a, &gpu_a, 28.0, "held frame A after decoding B");
+    assert_psnr(&cpu_b, &gpu_b, 28.0, "frame B");
+}
+
+#[test]
 fn gpu_encode_roundtrip_quality() {
     let Some((device, queue)) = device() else {
         eprintln!("skip: no wgpu adapter");

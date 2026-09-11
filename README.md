@@ -92,7 +92,8 @@ RUSTFLAGS="-C target-cpu=native" cargo build --profile release-fast
 
 Callers pass their existing `Device` / `Queue`. After `load_from`,
 `decode_to_texture` / `decode_preview_to_texture` produce a `Bgra8Unorm`
-texture and return after `queue.submit`. Later submits on the same queue can
+texture and return after `queue.submit`. Each call writes a new texture;
+later decodes do not overwrite it. Later submits on the same queue can
 sample it; CPU readback still waits in `read_texture_bgra`.
 `encode_from_texture` accepts `Bgra8Unorm` or `Rgba8Unorm` with `COPY_SRC` and
 is followed by `save_to`. Use `encode_from_texture_opaque` to skip the alpha

@@ -370,9 +370,7 @@ fn bench_resolution(
         .expect("submit");
     let submit_ms = t_submit.elapsed().as_secs_f64() * 1e3;
     let t_finish = std::time::Instant::now();
-    gpu_enc
-        .encode_submitted_finish(device)
-        .expect("finish");
+    gpu_enc.encode_submitted_finish(device).expect("finish");
     let finish_ms = t_finish.elapsed().as_secs_f64() * 1e3;
     println!(
         "GPU pipeline split (opaque, 1 sample): submit={submit_ms:.3} ms finish={finish_ms:.3} ms"
@@ -387,13 +385,15 @@ fn bench_resolution(
     report(
         "CPU encode_bgra_fused",
         timed_iters(warmup, iters, || {
-            enc.encode_bgra_fused(&bgra, stride).expect("cpu fused bgra");
+            enc.encode_bgra_fused(&bgra, stride)
+                .expect("cpu fused bgra");
         }),
     );
     report(
         "CPU encode_bgrx_fused",
         timed_iters(warmup, iters, || {
-            enc.encode_bgrx_fused(&bgra, stride).expect("cpu fused bgrx");
+            enc.encode_bgrx_fused(&bgra, stride)
+                .expect("cpu fused bgrx");
         }),
     );
 }

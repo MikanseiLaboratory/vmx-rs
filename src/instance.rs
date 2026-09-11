@@ -6,9 +6,8 @@ use crate::codec::slice::{
     encode_slices_fused_packed422,
 };
 use crate::color::convert::{
-    bgra_to_yuv4224_with_path, calculate_psnr, nv12_to_planar, planar_to_uyvy, planar_to_yuy2,
-    select_rgb_yuv, select_yuv_rgb, uyvy_to_planar, yuv422_band_to_bgra_with_path, yuy2_to_planar,
-    yv12_to_planar,
+    calculate_psnr, nv12_to_planar, planar_to_uyvy, planar_to_yuy2, select_rgb_yuv, select_yuv_rgb,
+    yuv422_band_to_bgra_with_path, yv12_to_planar,
 };
 use crate::color::simd::ColorSimdPath;
 use crate::container::{encoded_preview_length, parse_and_load, preview_bitstream_length, save_to};
@@ -400,22 +399,7 @@ impl Codec {
 
     pub fn encode_uyvy(&mut self, src: &[u8], stride: usize) -> Result<()> {
         self.image_format = ImageFormat::Uyvy;
-        let (y, uv) = self.planes.data.split_at_mut(1);
-        let (u, rest) = uv.split_at_mut(1);
-        let (v, _) = rest.split_at_mut(1);
-        uyvy_to_planar(
-            src,
-            stride,
-            &mut y[0],
-            self.planes.stride[0],
-            &mut u[0],
-            self.planes.stride[1],
-            &mut v[0],
-            self.planes.stride[2],
-            self.size,
-        );
-        self.encode_planes();
-        Ok(())
+        self.encode_fused_packed422(src, stride, false)
     }
 
     pub fn decode_uyvy(&mut self, dst: &mut [u8], stride: usize) -> Result<()> {
@@ -489,22 +473,7 @@ impl Codec {
 
     pub fn encode_yuy2(&mut self, src: &[u8], stride: usize) -> Result<()> {
         self.image_format = ImageFormat::Yuy2;
-        let (y, uv) = self.planes.data.split_at_mut(1);
-        let (u, rest) = uv.split_at_mut(1);
-        let (v, _) = rest.split_at_mut(1);
-        yuy2_to_planar(
-            src,
-            stride,
-            &mut y[0],
-            self.planes.stride[0],
-            &mut u[0],
-            self.planes.stride[1],
-            &mut v[0],
-            self.planes.stride[2],
-            self.size,
-        );
-        self.encode_planes();
-        Ok(())
+        self.encode_fused_packed422(src, stride, true)
     }
 
     pub fn decode_yuy2(&mut self, dst: &mut [u8], stride: usize) -> Result<()> {
@@ -526,32 +495,7 @@ impl Codec {
 
     pub fn encode_bgra(&mut self, src: &[u8], stride: usize) -> Result<()> {
         self.image_format = ImageFormat::Bgra;
-        let table = select_rgb_yuv(self.color_space, self.size.height);
-        let stride_y = self.planes.stride[0];
-        let stride_u = self.planes.stride[1];
-        let stride_v = self.planes.stride[2];
-        let stride_a = self.planes.stride[3];
-        let size = self.size;
-        let (y, rest) = self.planes.data.split_at_mut(1);
-        let (u, rest) = rest.split_at_mut(1);
-        let (v, a) = rest.split_at_mut(1);
-        bgra_to_yuv4224_with_path(
-            self.color_path,
-            src,
-            stride,
-            &mut y[0],
-            stride_y,
-            &mut u[0],
-            stride_u,
-            &mut v[0],
-            stride_v,
-            &mut a[0],
-            stride_a,
-            size,
-            table,
-        );
-        self.encode_planes();
-        Ok(())
+        self.encode_fused_bgra(src, stride, true)
     }
 
     pub fn decode_bgra(&mut self, dst: &mut [u8], stride: usize) -> Result<()> {
@@ -577,44 +521,6 @@ impl Codec {
 
     pub fn encode_bgrx(&mut self, src: &[u8], stride: usize) -> Result<()> {
         self.image_format = ImageFormat::Bgrx;
-        let table = select_rgb_yuv(self.color_space, self.size.height);
-        let stride_y = self.planes.stride[0];
-        let stride_u = self.planes.stride[1];
-        let stride_v = self.planes.stride[2];
-        let stride_a = self.planes.stride[3];
-        let size = self.size;
-        let (y, rest) = self.planes.data.split_at_mut(1);
-        let (u, rest) = rest.split_at_mut(1);
-        let (v, a) = rest.split_at_mut(1);
-        bgra_to_yuv4224_with_path(
-            self.color_path,
-            src,
-            stride,
-            &mut y[0],
-            stride_y,
-            &mut u[0],
-            stride_u,
-            &mut v[0],
-            stride_v,
-            &mut a[0],
-            stride_a,
-            size,
-            table,
-        );
-        self.encode_planes();
-        Ok(())
-    }
-
-    /// Slice-fused BGRA encode (color convert + FDCT per slice). Same bitstream
-    /// as [`Self::encode_bgra`] for progressive frames.
-    pub fn encode_bgra_fused(&mut self, src: &[u8], stride: usize) -> Result<()> {
-        self.image_format = ImageFormat::Bgra;
-        self.encode_fused_bgra(src, stride, true)
-    }
-
-    /// Slice-fused BGRX encode (no alpha plane). Same bitstream as [`Self::encode_bgrx`].
-    pub fn encode_bgrx_fused(&mut self, src: &[u8], stride: usize) -> Result<()> {
-        self.image_format = ImageFormat::Bgrx;
         self.encode_fused_bgra(src, stride, false)
     }
 
@@ -635,18 +541,6 @@ impl Codec {
             include_alpha,
         );
         Ok(())
-    }
-
-    /// Slice-fused UYVY encode. Same bitstream as [`Self::encode_uyvy`].
-    pub fn encode_uyvy_fused(&mut self, src: &[u8], stride: usize) -> Result<()> {
-        self.image_format = ImageFormat::Uyvy;
-        self.encode_fused_packed422(src, stride, false)
-    }
-
-    /// Slice-fused YUY2 encode. Same bitstream as [`Self::encode_yuy2`].
-    pub fn encode_yuy2_fused(&mut self, src: &[u8], stride: usize) -> Result<()> {
-        self.image_format = ImageFormat::Yuy2;
-        self.encode_fused_packed422(src, stride, true)
     }
 
     fn encode_fused_packed422(&mut self, src: &[u8], stride: usize, yuy2: bool) -> Result<()> {
@@ -941,52 +835,15 @@ mod tests {
     }
 
     #[test]
-    fn fused_bgra_matches_reference() {
+    fn encode_bgrx_bitstream_smaller_than_bgra() {
         let src = patterned_bgra(64, 64);
-        let mut reference = Codec::new(Config::new(64, 64)).unwrap();
-        reference.encode_bgra(&src, 64 * 4).unwrap();
-        let ref_bits = save_bits(&mut reference);
+        let mut bgrx = Codec::new(Config::new(64, 64)).unwrap();
+        bgrx.encode_bgrx(&src, 64 * 4).unwrap();
+        let bgrx_bits = save_bits(&mut bgrx);
 
-        let mut fused = Codec::new(Config::new(64, 64)).unwrap();
-        fused.encode_bgra_fused(&src, 64 * 4).unwrap();
-        let fused_bits = save_bits(&mut fused);
-        assert_eq!(ref_bits, fused_bits);
-    }
-
-    #[test]
-    fn fused_bgrx_matches_reference() {
-        let src = patterned_bgra(64, 64);
-        let mut reference = Codec::new(Config::new(64, 64)).unwrap();
-        reference.encode_bgrx(&src, 64 * 4).unwrap();
-        let ref_bits = save_bits(&mut reference);
-
-        let mut fused = Codec::new(Config::new(64, 64)).unwrap();
-        fused.encode_bgrx_fused(&src, 64 * 4).unwrap();
-        let fused_bits = save_bits(&mut fused);
-        assert_eq!(ref_bits, fused_bits);
-        assert!(
-            fused_bits.len() < {
-                let mut alpha = Codec::new(Config::new(64, 64)).unwrap();
-                alpha.encode_bgra(&src, 64 * 4).unwrap();
-                save_bits(&mut alpha).len()
-            }
-        );
-    }
-
-    #[test]
-    fn fused_uyvy_matches_reference() {
-        let stride = 64 * 2;
-        let mut frame = vec![0u8; stride * 64];
-        for (i, b) in frame.iter_mut().enumerate() {
-            *b = (i % 256) as u8;
-        }
-        let mut reference = Codec::new(Config::new(64, 64)).unwrap();
-        reference.encode_uyvy(&frame, stride).unwrap();
-        let ref_bits = save_bits(&mut reference);
-
-        let mut fused = Codec::new(Config::new(64, 64)).unwrap();
-        fused.encode_uyvy_fused(&frame, stride).unwrap();
-        let fused_bits = save_bits(&mut fused);
-        assert_eq!(ref_bits, fused_bits);
+        let mut bgra = Codec::new(Config::new(64, 64)).unwrap();
+        bgra.encode_bgra(&src, 64 * 4).unwrap();
+        let bgra_bits = save_bits(&mut bgra);
+        assert!(bgrx_bits.len() < bgra_bits.len());
     }
 }

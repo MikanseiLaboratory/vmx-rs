@@ -377,23 +377,9 @@ fn bench_resolution(
     );
 
     report(
-        "CPU encode_bgrx (3-plane, two-pass)",
+        "CPU encode_bgrx (3-plane)",
         timed_iters(warmup, iters, || {
             enc.encode_bgrx(&bgra, stride).expect("cpu bgrx");
-        }),
-    );
-    report(
-        "CPU encode_bgra_fused",
-        timed_iters(warmup, iters, || {
-            enc.encode_bgra_fused(&bgra, stride)
-                .expect("cpu fused bgra");
-        }),
-    );
-    report(
-        "CPU encode_bgrx_fused",
-        timed_iters(warmup, iters, || {
-            enc.encode_bgrx_fused(&bgra, stride)
-                .expect("cpu fused bgrx");
         }),
     );
 }

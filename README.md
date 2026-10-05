@@ -62,6 +62,14 @@ Selection priority:
 - **x86_64:** AVX2 if `avx2 && bmi2 && (width/2) % 16 == 0`, else SSE4.2+SSSE3, else Scalar
 - **aarch64:** Neon, else Scalar
 
+## Install
+
+The crates.io package is [`vmx1`](https://crates.io/crates/vmx1). The name `vmx` belongs to an unrelated crate. The Rust import path stays `vmx`.
+
+```toml
+vmx1 = "0.1"
+```
+
 ## Usage
 
 ```rust

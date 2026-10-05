@@ -1,5 +1,5 @@
 [package]
-name = "vmx"
+name = "vmx1"
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.97"
@@ -7,6 +7,10 @@ license = "MIT"
 description = "Pure Rust VMX1 video codec"
 authors = ["MikanseiLaboratory"]
 readme = "README.md"
+repository = "https://github.com/MikanseiLaboratory/vmx-rs"
+homepage = "https://github.com/MikanseiLaboratory/vmx-rs"
+keywords = ["video", "codec", "vmx", "omt"]
+categories = ["multimedia::video", "encoding"]
 
 [lib]
 name = "vmx"

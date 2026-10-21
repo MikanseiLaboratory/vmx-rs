@@ -159,6 +159,41 @@ pub unsafe fn uyvy_to_planar_ssse3(
     }
 }
 
+/// Pack one band of rows from planar 4:2:2 into packed UYVY or YUY2.
+///
+/// The fused decoders call this once per slice, so the rows are converted while
+/// they are still in cache. Converting the whole frame afterwards is a second pass
+/// over three planes, and it is the part that refused to scale with threads.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn planar_band_to_packed422(
+    y: &[u8],
+    y_stride: usize,
+    u: &[u8],
+    u_stride: usize,
+    v: &[u8],
+    v_stride: usize,
+    row0: usize,
+    rows: usize,
+    width: usize,
+    dst: &mut [u8],
+    dst_stride: usize,
+    yuy2: bool,
+) {
+    if rows == 0 {
+        return;
+    }
+    let y = &y[row0 * y_stride..];
+    let u = &u[row0 * u_stride..];
+    let v = &v[row0 * v_stride..];
+    let dst = &mut dst[row0 * dst_stride..];
+    let size = Size::new(width as i32, rows as i32);
+    if yuy2 {
+        planar_to_yuy2(y, y_stride, u, u_stride, v, v_stride, dst, dst_stride, size);
+    } else {
+        planar_to_uyvy(y, y_stride, u, u_stride, v, v_stride, dst, dst_stride, size);
+    }
+}
+
 /// Runtime-dispatched planar → UYVY.
 pub(crate) fn planar_to_uyvy(
     y: &[u8],

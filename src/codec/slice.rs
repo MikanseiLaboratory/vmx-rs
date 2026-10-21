@@ -126,87 +126,6 @@ fn prepare_slice_bitstream(slice: &mut SliceSet) {
     };
 }
 
-fn decode_slice_range(
-    path: SimdPath,
-    plane_ptrs: [usize; 3],
-    plane_lens: [usize; 3],
-    strides: [usize; 3],
-    slices: &mut [SliceSet],
-    decode_matrix: &[u16],
-    dc_shift: i32,
-) {
-    for slice in slices.iter_mut() {
-        prepare_slice_bitstream(slice);
-        for pi in 0..3 {
-            // SAFETY: each slice writes a disjoint row band; callers split slices across threads.
-            let data = unsafe {
-                std::slice::from_raw_parts_mut(plane_ptrs[pi] as *mut u8, plane_lens[pi])
-            };
-            let mut view = PlaneView {
-                index: pi,
-                data,
-                stride: strides[pi],
-                offset: slice.offset[pi],
-            };
-            decode_plane(
-                path,
-                &mut view,
-                &mut slice.dc,
-                &mut slice.ac,
-                decode_matrix,
-                dc_shift,
-                &mut slice.temp_block,
-            );
-        }
-    }
-}
-
-pub fn decode_slices(
-    path: SimdPath,
-    planes: &mut PlaneBuffers,
-    slices: &mut [SliceSet],
-    decode_matrix: &[u16],
-    dc_shift: i32,
-    pool: Option<&ThreadPool>,
-) {
-    let plane_ptrs = [
-        planes.data[0].as_mut_ptr() as usize,
-        planes.data[1].as_mut_ptr() as usize,
-        planes.data[2].as_mut_ptr() as usize,
-    ];
-    let plane_lens = [
-        planes.data[0].len(),
-        planes.data[1].len(),
-        planes.data[2].len(),
-    ];
-    let strides = [planes.stride[0], planes.stride[1], planes.stride[2]];
-
-    match pool {
-        Some(pool) if pool.thread_count() > 1 && slices.len() > 1 => {
-            pool.parallel_chunks_mut(slices, |chunk| {
-                decode_slice_range(
-                    path,
-                    plane_ptrs,
-                    plane_lens,
-                    strides,
-                    chunk,
-                    decode_matrix,
-                    dc_shift,
-                );
-            });
-        }
-        _ => decode_slice_range(
-            path,
-            plane_ptrs,
-            plane_lens,
-            strides,
-            slices,
-            decode_matrix,
-            dc_shift,
-        ),
-    }
-}
-
 /// Decode each slice then immediately pack that band to BGRA (cache-friendly).
 pub fn decode_slices_fused_bgra(
     path: SimdPath,
@@ -284,6 +203,98 @@ pub fn decode_slices_fused_bgra(
                 dst_band,
                 dst_stride,
                 table,
+            );
+        }
+    };
+
+    match pool {
+        Some(pool) if pool.thread_count() > 1 && slices.len() > 1 => {
+            pool.parallel_chunks_mut(slices, pack_chunk);
+        }
+        _ => pack_chunk(slices),
+    }
+}
+
+/// Decode each slice then immediately pack that band to UYVY or YUY2.
+///
+/// Same shape as [`decode_slices_fused_bgra`], and for the same reason: converting
+/// the frame after the decode is a second pass over three planes, and it is the part
+/// that does not get faster with more threads.
+#[allow(clippy::too_many_arguments)]
+pub fn decode_slices_fused_packed422(
+    path: SimdPath,
+    planes: &mut PlaneBuffers,
+    slices: &mut [SliceSet],
+    decode_matrix: &[u16],
+    dc_shift: i32,
+    pool: Option<&ThreadPool>,
+    dst: &mut [u8],
+    dst_stride: usize,
+    width: i32,
+    yuy2: bool,
+) {
+    let plane_ptrs = [
+        planes.data[0].as_mut_ptr() as usize,
+        planes.data[1].as_mut_ptr() as usize,
+        planes.data[2].as_mut_ptr() as usize,
+    ];
+    let plane_lens = [
+        planes.data[0].len(),
+        planes.data[1].len(),
+        planes.data[2].len(),
+    ];
+    let strides = [planes.stride[0], planes.stride[1], planes.stride[2]];
+    let dst_ptr = dst.as_mut_ptr() as usize;
+    let dst_len = dst.len();
+    let y_stride = planes.stride[0];
+
+    let pack_chunk = |chunk: &mut [SliceSet]| {
+        for slice in chunk.iter_mut() {
+            prepare_slice_bitstream(slice);
+            for pi in 0..3 {
+                // SAFETY: disjoint slice bands across threads; single-threaded within chunk.
+                let data = unsafe {
+                    std::slice::from_raw_parts_mut(plane_ptrs[pi] as *mut u8, plane_lens[pi])
+                };
+                let mut view = PlaneView {
+                    index: pi,
+                    data,
+                    stride: strides[pi],
+                    offset: slice.offset[pi],
+                };
+                decode_plane(
+                    path,
+                    &mut view,
+                    &mut slice.dc,
+                    &mut slice.ac,
+                    decode_matrix,
+                    dc_shift,
+                    &mut slice.temp_block,
+                );
+            }
+            let y_row0 = slice.offset[0] / y_stride;
+            let rows = slice.pixel_height.max(0) as usize;
+            // SAFETY: dst covers the whole frame; each slice writes its own row band.
+            let dst_band = unsafe { std::slice::from_raw_parts_mut(dst_ptr as *mut u8, dst_len) };
+            let y =
+                unsafe { std::slice::from_raw_parts(plane_ptrs[0] as *const u8, plane_lens[0]) };
+            let u =
+                unsafe { std::slice::from_raw_parts(plane_ptrs[1] as *const u8, plane_lens[1]) };
+            let v =
+                unsafe { std::slice::from_raw_parts(plane_ptrs[2] as *const u8, plane_lens[2]) };
+            crate::color::convert::planar_band_to_packed422(
+                y,
+                strides[0],
+                u,
+                strides[1],
+                v,
+                strides[2],
+                y_row0,
+                rows,
+                width as usize,
+                dst_band,
+                dst_stride,
+                yuy2,
             );
         }
     };

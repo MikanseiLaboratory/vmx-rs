@@ -79,3 +79,32 @@ pub fn adjust_bitrate(
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Raising quality stays in the 0..100 domain: `MAX_Q` is the ceiling
+    /// *value* (`VMX_MAXQ`), not the quant-preset index bound.
+    #[test]
+    fn raising_quality_does_not_collapse_to_the_preset_index_bound() {
+        let mut quality = 80;
+        adjust_bitrate(&mut quality, 80, 100, 1_000, 2_000);
+        assert_eq!(quality, 82);
+    }
+
+    #[test]
+    fn raising_quality_stops_at_the_vmx_maxq_ceiling() {
+        let mut quality = 97;
+        adjust_bitrate(&mut quality, 80, 100, 1_000, 2_000);
+        assert_eq!(quality, MAX_Q);
+        assert_eq!(MAX_Q, 98);
+    }
+
+    #[test]
+    fn lowering_quality_never_goes_below_the_profile_minimum() {
+        let mut quality = 80;
+        adjust_bitrate(&mut quality, 80, 5_000, 1_000, 2_000);
+        assert_eq!(quality, 80);
+    }
+}

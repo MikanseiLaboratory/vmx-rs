@@ -22,8 +22,8 @@ pub const MIN_HEIGHT: i32 = 16;
 pub const MAX_WIDTH: i32 = 7680;
 /// Maximum supported height (8K).
 pub const MAX_HEIGHT: i32 = 4320;
-/// Maximum quality index (`QUALITY_COUNT - 1`).
-pub const MAX_Q: i32 = 24;
+/// Maximum quality (`VMX_MAXQ`).
+pub const MAX_Q: i32 = 98;
 
 /// Align `value` up to a multiple of `align`.
 #[inline]

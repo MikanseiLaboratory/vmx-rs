@@ -166,10 +166,10 @@ struct FusedParams {
     v_word_off: u32,
 }
 
-#[derive(Clone, Copy)]
 struct PendingGpuEncode {
     slot: usize,
     include_alpha: bool,
+    index: wgpu::SubmissionIndex,
 }
 
 #[repr(C)]
@@ -960,7 +960,11 @@ impl Codec {
         texture: &wgpu::Texture,
         include_alpha: bool,
     ) -> Result<()> {
-        if self.gpu.as_ref().and_then(|g| g.pending_encode).is_some() {
+        if self
+            .gpu
+            .as_ref()
+            .is_some_and(|g| g.pending_encode.is_some())
+        {
             self.dispatch_encode_finish(device)?;
         }
         let t0 = std::time::Instant::now();
@@ -1069,10 +1073,11 @@ impl Codec {
             + if include_alpha { gpu.a_coeff_count } else { 0 };
         let bytes = u64::from(coeff_count) * 2;
         enc.copy_buffer_to_buffer(&gpu.coeffs, 0, &gpu.coeff_read[slot], 0, bytes.max(4));
-        queue.submit(Some(enc.finish()));
+        let index = queue.submit(Some(enc.finish()));
         gpu.pending_encode = Some(PendingGpuEncode {
             slot,
             include_alpha,
+            index,
         });
         if std::env::var_os("VMX_GPU_TRACE").is_some() {
             eprintln!(
@@ -1099,6 +1104,7 @@ impl Codec {
         encode_from_mapped(
             device,
             &gpu.coeff_read[pending.slot],
+            &pending.index,
             &mut self.slices,
             [
                 self.planes.stride[0],
@@ -1124,6 +1130,7 @@ impl Codec {
 fn encode_from_mapped(
     device: &wgpu::Device,
     buf: &wgpu::Buffer,
+    index: &wgpu::SubmissionIndex,
     slices: &mut [crate::codec::slice::SliceSet],
     strides: [usize; 4],
     y_n: usize,
@@ -1133,7 +1140,9 @@ fn encode_from_mapped(
 ) -> Result<()> {
     let slice = buf.slice(..);
     slice.map_async(wgpu::MapMode::Read, |_| {});
-    let _ = device.poll(wgpu::PollType::wait_indefinitely());
+    // Wait for this encode only: on a shared device the caller may be encoding
+    // from the render queue, and waiting for the whole queue stalls it.
+    wait(device, index);
     {
         let data = slice
             .get_mapped_range()
@@ -1188,7 +1197,7 @@ pub fn read_texture_bgra(
     wait(device, &index);
     let slice = buf.slice(..);
     slice.map_async(wgpu::MapMode::Read, |_| {});
-    let _ = device.poll(wgpu::PollType::wait_indefinitely());
+    wait(device, &index);
     let data = slice
         .get_mapped_range()
         .map_err(|e| gpu_err(format!("readback map: {e}")))?;

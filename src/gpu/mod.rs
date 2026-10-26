@@ -960,7 +960,11 @@ impl Codec {
         texture: &wgpu::Texture,
         include_alpha: bool,
     ) -> Result<()> {
-        if self.gpu.as_ref().is_some_and(|g| g.pending_encode.is_some()) {
+        if self
+            .gpu
+            .as_ref()
+            .is_some_and(|g| g.pending_encode.is_some())
+        {
             self.dispatch_encode_finish(device)?;
         }
         let t0 = std::time::Instant::now();

@@ -22,7 +22,7 @@ use crate::tables::{
     FDCT_ROUND1, FDCT_SQRT2, FDCT_TAN1, FDCT_TAN2, FDCT_TAN3, FTAB1_128, FTAB2_128, FTAB3_128,
     FTAB4_128, IDCT_COS4, IDCT_ROW_TABLES, IDCT_TG1, IDCT_TG2, IDCT_TG3, IRND_INV_COL,
     IRND_INV_CORR, IRND_INV_ROW, RND_FRW_ROW, SHIFT_FRW_COL, SHIFT_FRW_ROW, SHIFT_INV_COL,
-    SHIFT_INV_ROW, ZIGZAG_INV,
+    SHIFT_INV_ROW,
 };
 #[cfg(target_arch = "aarch64")]
 use crate::types::SLICE_HEIGHT;
@@ -140,6 +140,100 @@ unsafe fn fdct_row_neon(input: int16x8_t, ftab: &[i16; 32]) -> int16x8_t {
     }
 }
 
+/// Byte indices used to gather raster-ordered coefficients into zigzag order.
+///
+/// `A` selects bytes from rows 0..3, `B` from rows 4..7; `0xFF` marks a byte
+/// taken from the other half (`vqtbl4q_u8` yields 0 for it).
+#[cfg(target_arch = "aarch64")]
+const ZIG_IDX_A: [[u8; 16]; 8] = [
+    [0, 1, 2, 3, 16, 17, 32, 33, 18, 19, 4, 5, 6, 7, 20, 21],
+    [
+        34, 35, 48, 49, 255, 255, 50, 51, 36, 37, 22, 23, 8, 9, 10, 11,
+    ],
+    [
+        24, 25, 38, 39, 52, 53, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+    ],
+    [
+        54, 55, 40, 41, 26, 27, 12, 13, 14, 15, 28, 29, 42, 43, 56, 57,
+    ],
+    [
+        255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+    ],
+    [
+        58, 59, 44, 45, 30, 31, 46, 47, 60, 61, 255, 255, 255, 255, 255, 255,
+    ],
+    [
+        255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 62, 63, 255, 255, 255, 255,
+    ],
+    [
+        255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+    ],
+];
+
+#[cfg(target_arch = "aarch64")]
+const ZIG_IDX_B: [[u8; 16]; 8] = [
+    [
+        255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+    ],
+    [
+        255, 255, 255, 255, 0, 1, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+    ],
+    [
+        255, 255, 255, 255, 255, 255, 2, 3, 16, 17, 32, 33, 18, 19, 4, 5,
+    ],
+    [
+        255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+    ],
+    [6, 7, 20, 21, 34, 35, 48, 49, 50, 51, 36, 37, 22, 23, 8, 9],
+    [
+        255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 10, 11, 24, 25, 38, 39,
+    ],
+    [
+        52, 53, 54, 55, 40, 41, 26, 27, 12, 13, 255, 255, 14, 15, 28, 29,
+    ],
+    [
+        42, 43, 56, 57, 58, 59, 44, 45, 30, 31, 46, 47, 60, 61, 62, 63,
+    ],
+];
+
+/// Permute eight raster-ordered coefficient rows into zigzag order and return
+/// the non-zero mask (bit `i` set when zigzag position `i` is non-zero).
+#[cfg(target_arch = "aarch64")]
+#[inline]
+#[target_feature(enable = "neon")]
+unsafe fn zigzag_permute_neon(rows: &[int16x8_t; 8], out: *mut i16) -> u64 {
+    unsafe {
+        const WEIGHTS: [u8; 8] = [1, 2, 4, 8, 16, 32, 64, 128];
+        let weights = vld1_u8(WEIGHTS.as_ptr());
+        let mut mask = 0u64;
+        let a = uint8x16x4_t(
+            vreinterpretq_u8_s16(rows[0]),
+            vreinterpretq_u8_s16(rows[1]),
+            vreinterpretq_u8_s16(rows[2]),
+            vreinterpretq_u8_s16(rows[3]),
+        );
+        let b = uint8x16x4_t(
+            vreinterpretq_u8_s16(rows[4]),
+            vreinterpretq_u8_s16(rows[5]),
+            vreinterpretq_u8_s16(rows[6]),
+            vreinterpretq_u8_s16(rows[7]),
+        );
+        for k in 0..8 {
+            let idx_a = vld1q_u8(ZIG_IDX_A[k].as_ptr());
+            let idx_b = vld1q_u8(ZIG_IDX_B[k].as_ptr());
+            let v = vorrq_u8(vqtbl4q_u8(a, idx_a), vqtbl4q_u8(b, idx_b));
+            let coeffs = vreinterpretq_s16_u8(v);
+            vst1q_s16(out.add(k * 8), coeffs);
+            // Non-zero lanes -> 0xFFFF; narrow to 0/1 bytes, weight them and
+            // reduce so each group of eight coefficients becomes one byte.
+            let nz = vreinterpretq_s16_u16(vtstq_s16(coeffs, coeffs));
+            let bits = vreinterpret_u8_s8(vmovn_s16(nz));
+            mask |= (vaddv_u8(vand_u8(bits, weights)) as u64) << (8 * k);
+        }
+        mask & !1
+    }
+}
+
 /// Forward DCT, quantization and zigzag scan (NEON port of `fdct_quant_zig_sse`).
 ///
 /// # Safety
@@ -153,7 +247,7 @@ pub unsafe fn fdct_quant_zig_neon(
     matrix: *const u16,
     add_val: i16,
     out: &mut [i16; 64],
-) {
+) -> u64 {
     unsafe {
         let mut rows = [
             vreinterpretq_s16_u16(vmovl_u8(vld1_u8(src))),
@@ -254,14 +348,15 @@ pub unsafe fn fdct_quant_zig_neon(
             *row = sign_epi16_neon(q, *row);
         }
 
-        let mut spatial = [0i16; 64];
-        for (i, row) in transformed.iter().enumerate() {
-            vst1q_s16(spatial.as_mut_ptr().add(i * 8), *row);
-        }
-        for i in 0..64 {
-            out[ZIGZAG_INV[i] as usize] = spatial[i];
-        }
+        zigzag_permute_neon(&transformed, out.as_mut_ptr())
     }
+}
+
+/// Two's-magnitude-plus-one symbol for one coefficient.
+#[cfg(target_arch = "aarch64")]
+#[inline]
+fn symbol(coeff: i16) -> u32 {
+    (get_2mag_sign(coeff) as u32).wrapping_add(1)
 }
 
 /// Encode using NEON on aarch64; scalar fallback elsewhere.
@@ -318,7 +413,7 @@ unsafe fn encode_plane_neon(
                 if src_off + 7 * plane.stride + 8 > plane.data.len() {
                     continue;
                 }
-                fdct_quant_zig_neon(
+                let m_index = fdct_quant_zig_neon(
                     plane.data.as_ptr().add(src_off),
                     plane.stride,
                     encode_matrix.as_ptr(),
@@ -326,7 +421,6 @@ unsafe fn encode_plane_neon(
                     temp_block,
                 );
                 let dc_val = temp_block[0].wrapping_add(dc_round) >> dc_shift;
-                let m_index = ac_nonzero_mask_neon(temp_block);
 
                 dc.encode_dc(dc_val.wrapping_sub(dc_pred));
                 dc.emit_bits32();
@@ -336,23 +430,19 @@ unsafe fn encode_plane_neon(
                     continue;
                 }
 
-                let mut coded = [0u32; 64];
-                for i in 0..64 {
-                    coded[i] = (get_2mag_sign(temp_block[i]) as u32).wrapping_add(1);
-                }
                 let mut m = m_index;
                 let nz = m.trailing_zeros() as usize;
                 num_zeros += nz as u32;
                 ac.encode_zeros(&mut num_zeros);
                 ac.emit_bits32();
-                ac.encode_value(coded[nz]);
+                ac.encode_value(symbol(temp_block[nz]));
                 let mut pos = nz + 1;
                 m >>= nz + 1;
                 ac.emit_bits32();
                 while m != 0 {
                     let zeros = m.trailing_zeros() as usize;
                     ac.encode_zeros_small(zeros as u64);
-                    ac.encode_value(coded[pos + zeros]);
+                    ac.encode_value(symbol(temp_block[pos + zeros]));
                     pos += zeros + 1;
                     m >>= zeros + 1;
                     ac.emit_bits32();
@@ -364,39 +454,6 @@ unsafe fn encode_plane_neon(
         ac.emit_bits32();
         ac.flush_remaining_bits();
         dc.flush_remaining_bits();
-    }
-}
-
-/// Build a 64-bit mask of nonzero AC coefficients (bit `i` for `coeffs[i]`, `i >= 1`).
-#[cfg(target_arch = "aarch64")]
-#[target_feature(enable = "neon")]
-unsafe fn ac_nonzero_mask_neon(coeffs: &[i16; 64]) -> u64 {
-    unsafe {
-        let zero = vdupq_n_s16(0);
-        let mut mask = 0u64;
-        if coeffs[1] != 0 {
-            mask |= 1u64 << 1;
-        }
-        let mut idx = 2usize;
-        while idx + 8 <= 64 {
-            let v = vld1q_s16(coeffs.as_ptr().add(idx));
-            let eq = vceqq_s16(v, zero);
-            let mut eq_u = [0u16; 8];
-            vst1q_u16(eq_u.as_mut_ptr(), eq);
-            for (lane, &e) in eq_u.iter().enumerate() {
-                if e == 0 {
-                    mask |= 1u64 << (idx + lane);
-                }
-            }
-            idx += 8;
-        }
-        while idx < 64 {
-            if coeffs[idx] != 0 {
-                mask |= 1u64 << idx;
-            }
-            idx += 1;
-        }
-        mask
     }
 }
 
@@ -517,10 +574,62 @@ unsafe fn decode_plane_neon(
     ac.flush_remaining_read_bits();
 }
 
+/// Byte indices used to gather the entropy (zigzag) array back into raster
+/// rows. `A` selects bytes from coefficient rows 0..3, `B` from rows 4..7.
+#[cfg(target_arch = "aarch64")]
+const DEC_IDX_A: [[u8; 16]; 8] = [
+    [0, 1, 2, 3, 10, 11, 12, 13, 28, 29, 30, 31, 54, 55, 56, 57],
+    [4, 5, 8, 9, 14, 15, 26, 27, 32, 33, 52, 53, 58, 59, 255, 255],
+    [
+        6, 7, 16, 17, 24, 25, 34, 35, 50, 51, 60, 61, 255, 255, 255, 255,
+    ],
+    [
+        18, 19, 22, 23, 36, 37, 48, 49, 62, 63, 255, 255, 255, 255, 255, 255,
+    ],
+    [
+        20, 21, 38, 39, 46, 47, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+    ],
+    [
+        40, 41, 44, 45, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+    ],
+    [
+        42, 43, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+    ],
+    [
+        255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+    ],
+];
+
+#[cfg(target_arch = "aarch64")]
+const DEC_IDX_B: [[u8; 16]; 8] = [
+    [
+        255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+    ],
+    [
+        255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 20, 21,
+    ],
+    [
+        255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 18, 19, 22, 23,
+    ],
+    [
+        255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 16, 17, 24, 25, 42, 43,
+    ],
+    [
+        255, 255, 255, 255, 255, 255, 0, 1, 14, 15, 26, 27, 40, 41, 44, 45,
+    ],
+    [
+        255, 255, 255, 255, 2, 3, 12, 13, 28, 29, 38, 39, 46, 47, 56, 57,
+    ],
+    [
+        255, 255, 4, 5, 10, 11, 30, 31, 36, 37, 48, 49, 54, 55, 58, 59,
+    ],
+    [6, 7, 8, 9, 32, 33, 34, 35, 50, 51, 52, 53, 60, 61, 62, 63],
+];
+
 /// NEON inverse zigzag (entropy → spatial) for one 8×8 block.
 ///
-/// Bit-identical to scalar gather via [`ZIGZAG_INV`]. Uses `vqtbl1q_u8` /
-/// `vbslq_s16` / `vextq_u8` mirroring the x86 shuffle/blend sequence.
+/// Bit-identical to the scalar gather via [`ZIGZAG_INV`]: two `vqtbl4q_u8`
+/// gathers per output row cover the whole 128-byte coefficient array.
 ///
 /// # Safety
 /// Caller must enable NEON.
@@ -528,142 +637,26 @@ unsafe fn decode_plane_neon(
 #[target_feature(enable = "neon")]
 unsafe fn inverse_zigzag_8x8_neon(coeffs: &[i16; 64]) -> [int16x8_t; 8] {
     unsafe {
-        #[inline(always)]
-        unsafe fn shuffle_epi8(a: int16x8_t, idx: [u8; 16]) -> int16x8_t {
-            unsafe {
-                vreinterpretq_s16_u8(vqtbl1q_u8(vreinterpretq_u8_s16(a), vld1q_u8(idx.as_ptr())))
-            }
-        }
-        #[inline(always)]
-        unsafe fn blend_epi16(a: int16x8_t, b: int16x8_t, imm8: u8) -> int16x8_t {
-            unsafe {
-                let m: [u16; 8] =
-                    std::array::from_fn(|i| if imm8 & (1u8 << i) != 0 { u16::MAX } else { 0 });
-                vbslq_s16(vld1q_u16(m.as_ptr()), b, a)
-            }
-        }
-        // `_mm_slli_si128(a, N)` ≡ `vextq_u8(zeros, a, 16-N)`
-        #[inline(always)]
-        unsafe fn slli6(a: int16x8_t) -> int16x8_t {
-            unsafe { vreinterpretq_s16_u8(vextq_u8::<10>(vdupq_n_u8(0), vreinterpretq_u8_s16(a))) }
-        }
-        #[inline(always)]
-        unsafe fn slli8(a: int16x8_t) -> int16x8_t {
-            unsafe { vreinterpretq_s16_u8(vextq_u8::<8>(vdupq_n_u8(0), vreinterpretq_u8_s16(a))) }
-        }
-        #[inline(always)]
-        unsafe fn slli10(a: int16x8_t) -> int16x8_t {
-            unsafe { vreinterpretq_s16_u8(vextq_u8::<6>(vdupq_n_u8(0), vreinterpretq_u8_s16(a))) }
-        }
-        #[inline(always)]
-        unsafe fn slli14(a: int16x8_t) -> int16x8_t {
-            unsafe { vreinterpretq_s16_u8(vextq_u8::<2>(vdupq_n_u8(0), vreinterpretq_u8_s16(a))) }
-        }
-        // `_mm_srli_si128(a, N)` ≡ `vextq_u8(a, zeros, N)`
-        #[inline(always)]
-        unsafe fn srli8(a: int16x8_t) -> int16x8_t {
-            unsafe { vreinterpretq_s16_u8(vextq_u8::<8>(vreinterpretq_u8_s16(a), vdupq_n_u8(0))) }
-        }
-        #[inline(always)]
-        unsafe fn srli10(a: int16x8_t) -> int16x8_t {
-            unsafe { vreinterpretq_s16_u8(vextq_u8::<10>(vreinterpretq_u8_s16(a), vdupq_n_u8(0))) }
-        }
-        #[inline(always)]
-        unsafe fn srli12(a: int16x8_t) -> int16x8_t {
-            unsafe { vreinterpretq_s16_u8(vextq_u8::<12>(vreinterpretq_u8_s16(a), vdupq_n_u8(0))) }
-        }
-        #[inline(always)]
-        unsafe fn srli14(a: int16x8_t) -> int16x8_t {
-            unsafe { vreinterpretq_s16_u8(vextq_u8::<14>(vreinterpretq_u8_s16(a), vdupq_n_u8(0))) }
-        }
-
-        let mut a0 = vld1q_s16(coeffs.as_ptr());
-        let mut a1 = vld1q_s16(coeffs.as_ptr().add(8));
-        let mut a2 = vld1q_s16(coeffs.as_ptr().add(16));
-        let mut a3 = vld1q_s16(coeffs.as_ptr().add(24));
-        let mut a4 = vld1q_s16(coeffs.as_ptr().add(32));
-        let mut a5 = vld1q_s16(coeffs.as_ptr().add(40));
-        let a6_src = vld1q_s16(coeffs.as_ptr().add(48));
-        let a7_src = vld1q_s16(coeffs.as_ptr().add(56));
-
-        // Index arrays are memory order of `_mm_set_epi8(...)` (low byte first).
-        let mut v0 = shuffle_epi8(a0, [0, 1, 2, 3, 10, 11, 12, 13, 4, 5, 8, 9, 14, 15, 6, 7]);
-        let v1 = shuffle_epi8(a1, [4, 5, 0, 1, 8, 9, 10, 11, 12, 13, 14, 15, 2, 3, 6, 7]);
-        let mut v3 = shuffle_epi8(a3, [0, 1, 14, 15, 4, 5, 10, 11, 2, 3, 12, 13, 6, 7, 8, 9]);
-
-        a0 = blend_epi16(v0, v1, 0x30);
-        a0 = blend_epi16(a0, v3, 0xC0);
-
-        let mut v2 = shuffle_epi8(a2, [10, 11, 6, 7, 14, 15, 2, 3, 0, 1, 8, 9, 12, 13, 4, 5]);
-        let mut v5 = shuffle_epi8(a5, [0, 1, 8, 9, 4, 5, 14, 15, 12, 13, 10, 11, 2, 3, 6, 7]);
-
-        a2 = srli14(v0);
-        a2 = blend_epi16(a2, v3, 0x30);
-        a2 = blend_epi16(a2, v1, 0x6);
-        a2 = blend_epi16(a2, v2, 0x8);
-        a2 = blend_epi16(a2, v5, 0xC0);
-
-        v3 = slli6(v3);
-        let mut v4 = shuffle_epi8(a4, [6, 7, 8, 9, 10, 11, 0, 1, 14, 15, 4, 5, 2, 3, 12, 13]);
-
-        v0 = srli8(v0);
-        a1 = blend_epi16(v0, v1, 0x8);
-        a1 = blend_epi16(a1, v2, 0x10);
-        a1 = blend_epi16(a1, v3, 0x60);
-
-        let v6 = shuffle_epi8(
-            a6_src,
-            [
-                0xff, 0xff, 0xff, 0xff, 0, 1, 2, 3, 4, 5, 0xff, 0xff, 8, 9, 12, 13,
-            ],
+        let p = coeffs.as_ptr();
+        let a = uint8x16x4_t(
+            vreinterpretq_u8_s16(vld1q_s16(p)),
+            vreinterpretq_u8_s16(vld1q_s16(p.add(8))),
+            vreinterpretq_u8_s16(vld1q_s16(p.add(16))),
+            vreinterpretq_u8_s16(vld1q_s16(p.add(24))),
         );
-        let v7 = shuffle_epi8(
-            a7_src,
-            [8, 9, 0, 1, 6, 7, 10, 11, 2, 3, 4, 5, 12, 13, 14, 15],
+        let b = uint8x16x4_t(
+            vreinterpretq_u8_s16(vld1q_s16(p.add(32))),
+            vreinterpretq_u8_s16(vld1q_s16(p.add(40))),
+            vreinterpretq_u8_s16(vld1q_s16(p.add(48))),
+            vreinterpretq_u8_s16(vld1q_s16(p.add(56))),
         );
-
-        a4 = blend_epi16(v1, v6, 0xC0);
-        a4 = blend_epi16(a4, v2, 0x6);
-        a4 = blend_epi16(a4, v4, 0x18);
-        a4 = blend_epi16(a4, v5, 0x20);
-
-        let x6 = shuffle_epi8(
-            a6_src,
-            [
-                0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 6, 7, 14, 15, 10, 11,
-            ],
-        );
-
-        a3 = srli12(v1);
-        a3 = blend_epi16(a3, v3, 0x18);
-        a3 = blend_epi16(a3, x6, 0x80);
-
-        let mut a7 = blend_epi16(v7, v4, 0x3);
-        a7 = blend_epi16(a7, v6, 0xC);
-
-        let mut a6 = slli8(v7);
-        a6 = blend_epi16(a6, v4, 0x4);
-        a6 = blend_epi16(a6, v6, 0x10);
-        a6 = blend_epi16(a6, v5, 0x8);
-        a6 = blend_epi16(a6, v2, 0x1);
-
-        v4 = srli8(v4);
-
-        v2 = srli10(v2);
-        a5 = slli14(v7);
-        a5 = blend_epi16(a5, v4, 0xC);
-        a5 = blend_epi16(a5, v2, 0x3);
-        a5 = blend_epi16(a5, v5, 0x10);
-        a5 = blend_epi16(a5, x6, 0x60);
-
-        a6 = blend_epi16(a6, v4, 0x2);
-        a3 = blend_epi16(a3, v2, 0x4);
-
-        v5 = slli10(v5);
-        a3 = blend_epi16(a3, v5, 0x60);
-        a1 = blend_epi16(a1, v5, 0x80);
-
-        [a0, a1, a2, a3, a4, a5, a6, a7]
+        let mut rows = [vdupq_n_s16(0); 8];
+        for (k, row) in rows.iter_mut().enumerate() {
+            let idx_a = vld1q_u8(DEC_IDX_A[k].as_ptr());
+            let idx_b = vld1q_u8(DEC_IDX_B[k].as_ptr());
+            *row = vreinterpretq_s16_u8(vorrq_u8(vqtbl4q_u8(a, idx_a), vqtbl4q_u8(b, idx_b)));
+        }
+        rows
     }
 }
 
@@ -811,19 +804,9 @@ unsafe fn idct_columns_8_neon(rows: [int16x8_t; 8], add_val: i16) -> [int16x8_t;
 
 #[cfg(all(test, target_arch = "aarch64"))]
 mod tests {
-    use super::{ac_nonzero_mask_neon, fdct_quant_zig_neon, idct_row_neon, zig_invquant_idct_neon};
+    use super::{fdct_quant_zig_neon, idct_row_neon, zig_invquant_idct_neon};
     use crate::codec::dct::{fdct_quant_zig, idct_row, zig_invquant_idct};
     use crate::tables::IDCT_ROW_TABLES;
-
-    fn ac_nonzero_mask_scalar(coeffs: &[i16; 64]) -> u64 {
-        let mut mask = 0u64;
-        for (i, coeff) in coeffs.iter().enumerate().skip(1) {
-            if *coeff != 0 {
-                mask |= 1u64 << i;
-            }
-        }
-        mask
-    }
 
     #[test]
     fn fdct_quant_zig_neon_matches_scalar_oracle() {
@@ -844,25 +827,16 @@ mod tests {
             let mut actual = [0i16; 64];
             fdct_quant_zig(&src, stride, &matrix, add_val, &mut expected);
             unsafe {
-                fdct_quant_zig_neon(src.as_ptr(), stride, matrix.as_ptr(), add_val, &mut actual);
+                let _mask = fdct_quant_zig_neon(
+                    src.as_ptr(),
+                    stride,
+                    matrix.as_ptr(),
+                    add_val,
+                    &mut actual,
+                );
             }
             assert_eq!(actual, expected, "add_val {add_val}");
         }
-    }
-
-    #[test]
-    fn ac_nonzero_mask_neon_matches_scalar() {
-        let mut coeffs = [0i16; 64];
-        for (i, c) in coeffs.iter_mut().enumerate() {
-            *c = if (i * 17 + 3) % 11 == 0 {
-                0
-            } else {
-                ((i as i16) - 32) * 3
-            };
-        }
-        let expected = ac_nonzero_mask_scalar(&coeffs);
-        let actual = unsafe { ac_nonzero_mask_neon(&coeffs) };
-        assert_eq!(actual, expected);
     }
 
     #[test]

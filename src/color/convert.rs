@@ -43,6 +43,12 @@ pub(crate) fn uyvy_to_planar(
     v_stride: usize,
     size: Size,
 ) {
+    #[cfg(target_arch = "aarch64")]
+    {
+        // SAFETY: NEON/ASIMD is baseline on Rust aarch64 targets.
+        unsafe { uyvy_to_planar_neon(src, stride, y, y_stride, u, u_stride, v, v_stride, size) }
+    }
+
     #[cfg(target_arch = "x86_64")]
     {
         if is_x86_feature_detected!("ssse3") {
@@ -51,11 +57,15 @@ pub(crate) fn uyvy_to_planar(
                 uyvy_to_planar_ssse3(src, stride, y, y_stride, u, u_stride, v, v_stride, size)
             };
         }
+        uyvy_to_planar_scalar(src, stride, y, y_stride, u, u_stride, v, v_stride, size)
     }
+
+    #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
     uyvy_to_planar_scalar(src, stride, y, y_stride, u, u_stride, v, v_stride, size);
 }
 
 /// Scalar UYVY → planar.
+#[allow(dead_code)] // aarch64 dispatches to NEON; kept as the reference path and for tests
 pub fn uyvy_to_planar_scalar(
     src: &[u8],
     stride: usize,
@@ -82,6 +92,49 @@ pub fn uyvy_to_planar_scalar(
             yd[px + 1] = s[px * 2 + 3];
             x += 1;
             px += 2;
+        }
+    }
+}
+
+/// NEON UYVY → planar (32 pixels per iteration, bit-exact with scalar).
+#[cfg(target_arch = "aarch64")]
+#[target_feature(enable = "neon")]
+pub unsafe fn uyvy_to_planar_neon(
+    src: &[u8],
+    stride: usize,
+    y: &mut [u8],
+    y_stride: usize,
+    u: &mut [u8],
+    u_stride: usize,
+    v: &mut [u8],
+    v_stride: usize,
+    size: Size,
+) {
+    use std::arch::aarch64::*;
+    unsafe {
+        let width = size.width as usize;
+        for row in 0..size.height as usize {
+            let s = src.as_ptr().add(row * stride);
+            let yd = y.as_mut_ptr().add(row * y_stride);
+            let ud = u.as_mut_ptr().add(row * u_stride);
+            let vd = v.as_mut_ptr().add(row * v_stride);
+            let mut x = 0usize;
+            while x + 32 <= width {
+                let px = vld4q_u8(s.add(2 * x));
+                let (uu, ye, vv, yo) = (px.0, px.1, px.2, px.3);
+                vst2q_u8(yd.add(x), uint8x16x2_t(ye, yo));
+                vst1q_u8(ud.add(x / 2), uu);
+                vst1q_u8(vd.add(x / 2), vv);
+                x += 32;
+            }
+            while x < width {
+                let o = 2 * x;
+                *ud.add(x / 2) = *s.add(o);
+                *yd.add(x) = *s.add(o + 1);
+                *vd.add(x / 2) = *s.add(o + 2);
+                *yd.add(x + 1) = *s.add(o + 3);
+                x += 2;
+            }
         }
     }
 }
@@ -171,6 +224,12 @@ pub(crate) fn planar_to_uyvy(
     stride: usize,
     size: Size,
 ) {
+    #[cfg(target_arch = "aarch64")]
+    {
+        // SAFETY: NEON/ASIMD is baseline on Rust aarch64 targets.
+        unsafe { planar_to_uyvy_neon(y, y_stride, u, u_stride, v, v_stride, dst, stride, size) }
+    }
+
     #[cfg(target_arch = "x86_64")]
     {
         if is_x86_feature_detected!("sse2") {
@@ -178,11 +237,15 @@ pub(crate) fn planar_to_uyvy(
                 planar_to_uyvy_sse2(y, y_stride, u, u_stride, v, v_stride, dst, stride, size)
             };
         }
+        planar_to_uyvy_scalar(y, y_stride, u, u_stride, v, v_stride, dst, stride, size)
     }
+
+    #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
     planar_to_uyvy_scalar(y, y_stride, u, u_stride, v, v_stride, dst, stride, size);
 }
 
 /// Scalar planar → UYVY.
+#[allow(dead_code)] // aarch64 dispatches to NEON; kept as the reference path and for tests
 pub fn planar_to_uyvy_scalar(
     y: &[u8],
     y_stride: usize,
@@ -208,6 +271,49 @@ pub fn planar_to_uyvy_scalar(
             d[px * 2 + 3] = yd[px + 1];
             x += 1;
             px += 2;
+        }
+    }
+}
+
+/// NEON planar → UYVY (32 pixels per iteration, bit-exact with scalar).
+#[cfg(target_arch = "aarch64")]
+#[target_feature(enable = "neon")]
+pub unsafe fn planar_to_uyvy_neon(
+    y: &[u8],
+    y_stride: usize,
+    u: &[u8],
+    u_stride: usize,
+    v: &[u8],
+    v_stride: usize,
+    dst: &mut [u8],
+    stride: usize,
+    size: Size,
+) {
+    use std::arch::aarch64::*;
+    unsafe {
+        let width = size.width as usize;
+        for row in 0..size.height as usize {
+            let yd = y.as_ptr().add(row * y_stride);
+            let ud = u.as_ptr().add(row * u_stride);
+            let vd = v.as_ptr().add(row * v_stride);
+            let d = dst.as_mut_ptr().add(row * stride);
+            let mut x = 0usize;
+            while x + 32 <= width {
+                // Deinterleaved luma: even pixels in `.0`, odd pixels in `.1`.
+                let yv = vld2q_u8(yd.add(x));
+                let uu = vld1q_u8(ud.add(x / 2));
+                let vv = vld1q_u8(vd.add(x / 2));
+                vst4q_u8(d.add(2 * x), uint8x16x4_t(uu, yv.0, vv, yv.1));
+                x += 32;
+            }
+            while x < width {
+                let o = 2 * x;
+                *d.add(o) = *ud.add(x / 2);
+                *d.add(o + 1) = *yd.add(x);
+                *d.add(o + 2) = *vd.add(x / 2);
+                *d.add(o + 3) = *yd.add(x + 1);
+                x += 2;
+            }
         }
     }
 }
@@ -1139,6 +1245,66 @@ mod tests {
             &y, y_stride, &u, u_stride, &v, u_stride, &mut out, stride, size,
         );
         assert_eq!(src, out);
+    }
+
+    #[cfg(target_arch = "aarch64")]
+    #[test]
+    fn uyvy_to_planar_neon_matches_scalar() {
+        for width in [2, 4, 30, 32, 34, 62, 64, 66, 130] {
+            let height = 3;
+            let size = Size::new(width, height);
+            let (src, stride) = fill_uyvy(width, height);
+            let y_stride = width as usize;
+            let u_stride = (width / 2) as usize;
+            let plane_len = y_stride * height as usize;
+            let uv_len = u_stride * height as usize;
+
+            let mut ys = vec![0u8; plane_len];
+            let mut us = vec![0u8; uv_len];
+            let mut vs = vec![0u8; uv_len];
+            let mut yn = vec![0u8; plane_len];
+            let mut un = vec![0u8; uv_len];
+            let mut vn = vec![0u8; uv_len];
+
+            uyvy_to_planar_scalar(
+                &src, stride, &mut ys, y_stride, &mut us, u_stride, &mut vs, u_stride, size,
+            );
+            // SAFETY: NEON/ASIMD is baseline on aarch64; buffers are sized for `size`.
+            unsafe {
+                uyvy_to_planar_neon(
+                    &src, stride, &mut yn, y_stride, &mut un, u_stride, &mut vn, u_stride, size,
+                );
+            }
+
+            assert_eq!(ys, yn, "luma mismatch at width {width}");
+            assert_eq!(us, un, "U mismatch at width {width}");
+            assert_eq!(vs, vn, "V mismatch at width {width}");
+        }
+    }
+
+    #[cfg(target_arch = "aarch64")]
+    #[test]
+    fn planar_to_uyvy_neon_matches_scalar() {
+        for width in [2, 4, 30, 32, 34, 62, 64, 66, 130] {
+            let height = 3;
+            let size = Size::new(width, height);
+            let (y, u, v, y_stride, u_stride) = fill_yuv422_planes(width as usize, height as usize);
+            let stride = (width as usize) * 2;
+            let mut dst_s = vec![0u8; stride * height as usize];
+            let mut dst_n = vec![0u8; stride * height as usize];
+
+            planar_to_uyvy_scalar(
+                &y, y_stride, &u, u_stride, &v, u_stride, &mut dst_s, stride, size,
+            );
+            // SAFETY: NEON/ASIMD is baseline on aarch64; buffers are sized for `size`.
+            unsafe {
+                planar_to_uyvy_neon(
+                    &y, y_stride, &u, u_stride, &v, u_stride, &mut dst_n, stride, size,
+                );
+            }
+
+            assert_eq!(dst_s, dst_n, "UYVY mismatch at width {width}");
+        }
     }
 
     fn fill_yuv422_planes(

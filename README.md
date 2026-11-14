@@ -67,7 +67,7 @@ Selection priority:
 The crates.io package is [`vmx1`](https://crates.io/crates/vmx1). The name `vmx` belongs to an unrelated crate. The Rust import path stays `vmx`.
 
 ```toml
-vmx1 = "0.1"
+vmx1 = "0.2"
 ```
 
 ## Usage

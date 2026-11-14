@@ -264,6 +264,13 @@ pub unsafe fn fdct_quant_zig_neon(
     }
 }
 
+/// Two's-magnitude-plus-one symbol for one coefficient.
+#[cfg(target_arch = "aarch64")]
+#[inline]
+fn symbol(coeff: i16) -> u32 {
+    (get_2mag_sign(coeff) as u32).wrapping_add(1)
+}
+
 /// Encode using NEON on aarch64; scalar fallback elsewhere.
 pub fn encode_plane(
     plane: &PlaneView<'_>,
@@ -326,7 +333,14 @@ unsafe fn encode_plane_neon(
                     temp_block,
                 );
                 let dc_val = temp_block[0].wrapping_add(dc_round) >> dc_shift;
-                let m_index = ac_nonzero_mask_neon(temp_block);
+
+                // Build the non-zero AC mask in one pass over the zigzag scan.
+                // The symbol table is not materialised: each non-zero
+                // coefficient is visited exactly once by the AC loop below.
+                let mut m_index = 0u64;
+                for (i, &coeff) in temp_block.iter().enumerate().skip(1) {
+                    m_index |= ((coeff != 0) as u64) << i;
+                }
 
                 dc.encode_dc(dc_val.wrapping_sub(dc_pred));
                 dc.emit_bits32();
@@ -336,23 +350,19 @@ unsafe fn encode_plane_neon(
                     continue;
                 }
 
-                let mut coded = [0u32; 64];
-                for i in 0..64 {
-                    coded[i] = (get_2mag_sign(temp_block[i]) as u32).wrapping_add(1);
-                }
                 let mut m = m_index;
                 let nz = m.trailing_zeros() as usize;
                 num_zeros += nz as u32;
                 ac.encode_zeros(&mut num_zeros);
                 ac.emit_bits32();
-                ac.encode_value(coded[nz]);
+                ac.encode_value(symbol(temp_block[nz]));
                 let mut pos = nz + 1;
                 m >>= nz + 1;
                 ac.emit_bits32();
                 while m != 0 {
                     let zeros = m.trailing_zeros() as usize;
                     ac.encode_zeros_small(zeros as u64);
-                    ac.encode_value(coded[pos + zeros]);
+                    ac.encode_value(symbol(temp_block[pos + zeros]));
                     pos += zeros + 1;
                     m >>= zeros + 1;
                     ac.emit_bits32();
@@ -364,39 +374,6 @@ unsafe fn encode_plane_neon(
         ac.emit_bits32();
         ac.flush_remaining_bits();
         dc.flush_remaining_bits();
-    }
-}
-
-/// Build a 64-bit mask of nonzero AC coefficients (bit `i` for `coeffs[i]`, `i >= 1`).
-#[cfg(target_arch = "aarch64")]
-#[target_feature(enable = "neon")]
-unsafe fn ac_nonzero_mask_neon(coeffs: &[i16; 64]) -> u64 {
-    unsafe {
-        let zero = vdupq_n_s16(0);
-        let mut mask = 0u64;
-        if coeffs[1] != 0 {
-            mask |= 1u64 << 1;
-        }
-        let mut idx = 2usize;
-        while idx + 8 <= 64 {
-            let v = vld1q_s16(coeffs.as_ptr().add(idx));
-            let eq = vceqq_s16(v, zero);
-            let mut eq_u = [0u16; 8];
-            vst1q_u16(eq_u.as_mut_ptr(), eq);
-            for (lane, &e) in eq_u.iter().enumerate() {
-                if e == 0 {
-                    mask |= 1u64 << (idx + lane);
-                }
-            }
-            idx += 8;
-        }
-        while idx < 64 {
-            if coeffs[idx] != 0 {
-                mask |= 1u64 << idx;
-            }
-            idx += 1;
-        }
-        mask
     }
 }
 
@@ -811,19 +788,9 @@ unsafe fn idct_columns_8_neon(rows: [int16x8_t; 8], add_val: i16) -> [int16x8_t;
 
 #[cfg(all(test, target_arch = "aarch64"))]
 mod tests {
-    use super::{ac_nonzero_mask_neon, fdct_quant_zig_neon, idct_row_neon, zig_invquant_idct_neon};
+    use super::{fdct_quant_zig_neon, idct_row_neon, zig_invquant_idct_neon};
     use crate::codec::dct::{fdct_quant_zig, idct_row, zig_invquant_idct};
     use crate::tables::IDCT_ROW_TABLES;
-
-    fn ac_nonzero_mask_scalar(coeffs: &[i16; 64]) -> u64 {
-        let mut mask = 0u64;
-        for (i, coeff) in coeffs.iter().enumerate().skip(1) {
-            if *coeff != 0 {
-                mask |= 1u64 << i;
-            }
-        }
-        mask
-    }
 
     #[test]
     fn fdct_quant_zig_neon_matches_scalar_oracle() {
@@ -848,21 +815,6 @@ mod tests {
             }
             assert_eq!(actual, expected, "add_val {add_val}");
         }
-    }
-
-    #[test]
-    fn ac_nonzero_mask_neon_matches_scalar() {
-        let mut coeffs = [0i16; 64];
-        for (i, c) in coeffs.iter_mut().enumerate() {
-            *c = if (i * 17 + 3) % 11 == 0 {
-                0
-            } else {
-                ((i as i16) - 32) * 3
-            };
-        }
-        let expected = ac_nonzero_mask_scalar(&coeffs);
-        let actual = unsafe { ac_nonzero_mask_neon(&coeffs) };
-        assert_eq!(actual, expected);
     }
 
     #[test]

@@ -574,10 +574,62 @@ unsafe fn decode_plane_neon(
     ac.flush_remaining_read_bits();
 }
 
+/// Byte indices used to gather the entropy (zigzag) array back into raster
+/// rows. `A` selects bytes from coefficient rows 0..3, `B` from rows 4..7.
+#[cfg(target_arch = "aarch64")]
+const DEC_IDX_A: [[u8; 16]; 8] = [
+    [0, 1, 2, 3, 10, 11, 12, 13, 28, 29, 30, 31, 54, 55, 56, 57],
+    [4, 5, 8, 9, 14, 15, 26, 27, 32, 33, 52, 53, 58, 59, 255, 255],
+    [
+        6, 7, 16, 17, 24, 25, 34, 35, 50, 51, 60, 61, 255, 255, 255, 255,
+    ],
+    [
+        18, 19, 22, 23, 36, 37, 48, 49, 62, 63, 255, 255, 255, 255, 255, 255,
+    ],
+    [
+        20, 21, 38, 39, 46, 47, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+    ],
+    [
+        40, 41, 44, 45, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+    ],
+    [
+        42, 43, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+    ],
+    [
+        255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+    ],
+];
+
+#[cfg(target_arch = "aarch64")]
+const DEC_IDX_B: [[u8; 16]; 8] = [
+    [
+        255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+    ],
+    [
+        255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 20, 21,
+    ],
+    [
+        255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 18, 19, 22, 23,
+    ],
+    [
+        255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 16, 17, 24, 25, 42, 43,
+    ],
+    [
+        255, 255, 255, 255, 255, 255, 0, 1, 14, 15, 26, 27, 40, 41, 44, 45,
+    ],
+    [
+        255, 255, 255, 255, 2, 3, 12, 13, 28, 29, 38, 39, 46, 47, 56, 57,
+    ],
+    [
+        255, 255, 4, 5, 10, 11, 30, 31, 36, 37, 48, 49, 54, 55, 58, 59,
+    ],
+    [6, 7, 8, 9, 32, 33, 34, 35, 50, 51, 52, 53, 60, 61, 62, 63],
+];
+
 /// NEON inverse zigzag (entropy → spatial) for one 8×8 block.
 ///
-/// Bit-identical to scalar gather via [`ZIGZAG_INV`]. Uses `vqtbl1q_u8` /
-/// `vbslq_s16` / `vextq_u8` mirroring the x86 shuffle/blend sequence.
+/// Bit-identical to the scalar gather via [`ZIGZAG_INV`]: two `vqtbl4q_u8`
+/// gathers per output row cover the whole 128-byte coefficient array.
 ///
 /// # Safety
 /// Caller must enable NEON.
@@ -585,142 +637,26 @@ unsafe fn decode_plane_neon(
 #[target_feature(enable = "neon")]
 unsafe fn inverse_zigzag_8x8_neon(coeffs: &[i16; 64]) -> [int16x8_t; 8] {
     unsafe {
-        #[inline(always)]
-        unsafe fn shuffle_epi8(a: int16x8_t, idx: [u8; 16]) -> int16x8_t {
-            unsafe {
-                vreinterpretq_s16_u8(vqtbl1q_u8(vreinterpretq_u8_s16(a), vld1q_u8(idx.as_ptr())))
-            }
-        }
-        #[inline(always)]
-        unsafe fn blend_epi16(a: int16x8_t, b: int16x8_t, imm8: u8) -> int16x8_t {
-            unsafe {
-                let m: [u16; 8] =
-                    std::array::from_fn(|i| if imm8 & (1u8 << i) != 0 { u16::MAX } else { 0 });
-                vbslq_s16(vld1q_u16(m.as_ptr()), b, a)
-            }
-        }
-        // `_mm_slli_si128(a, N)` ≡ `vextq_u8(zeros, a, 16-N)`
-        #[inline(always)]
-        unsafe fn slli6(a: int16x8_t) -> int16x8_t {
-            unsafe { vreinterpretq_s16_u8(vextq_u8::<10>(vdupq_n_u8(0), vreinterpretq_u8_s16(a))) }
-        }
-        #[inline(always)]
-        unsafe fn slli8(a: int16x8_t) -> int16x8_t {
-            unsafe { vreinterpretq_s16_u8(vextq_u8::<8>(vdupq_n_u8(0), vreinterpretq_u8_s16(a))) }
-        }
-        #[inline(always)]
-        unsafe fn slli10(a: int16x8_t) -> int16x8_t {
-            unsafe { vreinterpretq_s16_u8(vextq_u8::<6>(vdupq_n_u8(0), vreinterpretq_u8_s16(a))) }
-        }
-        #[inline(always)]
-        unsafe fn slli14(a: int16x8_t) -> int16x8_t {
-            unsafe { vreinterpretq_s16_u8(vextq_u8::<2>(vdupq_n_u8(0), vreinterpretq_u8_s16(a))) }
-        }
-        // `_mm_srli_si128(a, N)` ≡ `vextq_u8(a, zeros, N)`
-        #[inline(always)]
-        unsafe fn srli8(a: int16x8_t) -> int16x8_t {
-            unsafe { vreinterpretq_s16_u8(vextq_u8::<8>(vreinterpretq_u8_s16(a), vdupq_n_u8(0))) }
-        }
-        #[inline(always)]
-        unsafe fn srli10(a: int16x8_t) -> int16x8_t {
-            unsafe { vreinterpretq_s16_u8(vextq_u8::<10>(vreinterpretq_u8_s16(a), vdupq_n_u8(0))) }
-        }
-        #[inline(always)]
-        unsafe fn srli12(a: int16x8_t) -> int16x8_t {
-            unsafe { vreinterpretq_s16_u8(vextq_u8::<12>(vreinterpretq_u8_s16(a), vdupq_n_u8(0))) }
-        }
-        #[inline(always)]
-        unsafe fn srli14(a: int16x8_t) -> int16x8_t {
-            unsafe { vreinterpretq_s16_u8(vextq_u8::<14>(vreinterpretq_u8_s16(a), vdupq_n_u8(0))) }
-        }
-
-        let mut a0 = vld1q_s16(coeffs.as_ptr());
-        let mut a1 = vld1q_s16(coeffs.as_ptr().add(8));
-        let mut a2 = vld1q_s16(coeffs.as_ptr().add(16));
-        let mut a3 = vld1q_s16(coeffs.as_ptr().add(24));
-        let mut a4 = vld1q_s16(coeffs.as_ptr().add(32));
-        let mut a5 = vld1q_s16(coeffs.as_ptr().add(40));
-        let a6_src = vld1q_s16(coeffs.as_ptr().add(48));
-        let a7_src = vld1q_s16(coeffs.as_ptr().add(56));
-
-        // Index arrays are memory order of `_mm_set_epi8(...)` (low byte first).
-        let mut v0 = shuffle_epi8(a0, [0, 1, 2, 3, 10, 11, 12, 13, 4, 5, 8, 9, 14, 15, 6, 7]);
-        let v1 = shuffle_epi8(a1, [4, 5, 0, 1, 8, 9, 10, 11, 12, 13, 14, 15, 2, 3, 6, 7]);
-        let mut v3 = shuffle_epi8(a3, [0, 1, 14, 15, 4, 5, 10, 11, 2, 3, 12, 13, 6, 7, 8, 9]);
-
-        a0 = blend_epi16(v0, v1, 0x30);
-        a0 = blend_epi16(a0, v3, 0xC0);
-
-        let mut v2 = shuffle_epi8(a2, [10, 11, 6, 7, 14, 15, 2, 3, 0, 1, 8, 9, 12, 13, 4, 5]);
-        let mut v5 = shuffle_epi8(a5, [0, 1, 8, 9, 4, 5, 14, 15, 12, 13, 10, 11, 2, 3, 6, 7]);
-
-        a2 = srli14(v0);
-        a2 = blend_epi16(a2, v3, 0x30);
-        a2 = blend_epi16(a2, v1, 0x6);
-        a2 = blend_epi16(a2, v2, 0x8);
-        a2 = blend_epi16(a2, v5, 0xC0);
-
-        v3 = slli6(v3);
-        let mut v4 = shuffle_epi8(a4, [6, 7, 8, 9, 10, 11, 0, 1, 14, 15, 4, 5, 2, 3, 12, 13]);
-
-        v0 = srli8(v0);
-        a1 = blend_epi16(v0, v1, 0x8);
-        a1 = blend_epi16(a1, v2, 0x10);
-        a1 = blend_epi16(a1, v3, 0x60);
-
-        let v6 = shuffle_epi8(
-            a6_src,
-            [
-                0xff, 0xff, 0xff, 0xff, 0, 1, 2, 3, 4, 5, 0xff, 0xff, 8, 9, 12, 13,
-            ],
+        let p = coeffs.as_ptr();
+        let a = uint8x16x4_t(
+            vreinterpretq_u8_s16(vld1q_s16(p)),
+            vreinterpretq_u8_s16(vld1q_s16(p.add(8))),
+            vreinterpretq_u8_s16(vld1q_s16(p.add(16))),
+            vreinterpretq_u8_s16(vld1q_s16(p.add(24))),
         );
-        let v7 = shuffle_epi8(
-            a7_src,
-            [8, 9, 0, 1, 6, 7, 10, 11, 2, 3, 4, 5, 12, 13, 14, 15],
+        let b = uint8x16x4_t(
+            vreinterpretq_u8_s16(vld1q_s16(p.add(32))),
+            vreinterpretq_u8_s16(vld1q_s16(p.add(40))),
+            vreinterpretq_u8_s16(vld1q_s16(p.add(48))),
+            vreinterpretq_u8_s16(vld1q_s16(p.add(56))),
         );
-
-        a4 = blend_epi16(v1, v6, 0xC0);
-        a4 = blend_epi16(a4, v2, 0x6);
-        a4 = blend_epi16(a4, v4, 0x18);
-        a4 = blend_epi16(a4, v5, 0x20);
-
-        let x6 = shuffle_epi8(
-            a6_src,
-            [
-                0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 6, 7, 14, 15, 10, 11,
-            ],
-        );
-
-        a3 = srli12(v1);
-        a3 = blend_epi16(a3, v3, 0x18);
-        a3 = blend_epi16(a3, x6, 0x80);
-
-        let mut a7 = blend_epi16(v7, v4, 0x3);
-        a7 = blend_epi16(a7, v6, 0xC);
-
-        let mut a6 = slli8(v7);
-        a6 = blend_epi16(a6, v4, 0x4);
-        a6 = blend_epi16(a6, v6, 0x10);
-        a6 = blend_epi16(a6, v5, 0x8);
-        a6 = blend_epi16(a6, v2, 0x1);
-
-        v4 = srli8(v4);
-
-        v2 = srli10(v2);
-        a5 = slli14(v7);
-        a5 = blend_epi16(a5, v4, 0xC);
-        a5 = blend_epi16(a5, v2, 0x3);
-        a5 = blend_epi16(a5, v5, 0x10);
-        a5 = blend_epi16(a5, x6, 0x60);
-
-        a6 = blend_epi16(a6, v4, 0x2);
-        a3 = blend_epi16(a3, v2, 0x4);
-
-        v5 = slli10(v5);
-        a3 = blend_epi16(a3, v5, 0x60);
-        a1 = blend_epi16(a1, v5, 0x80);
-
-        [a0, a1, a2, a3, a4, a5, a6, a7]
+        let mut rows = [vdupq_n_s16(0); 8];
+        for (k, row) in rows.iter_mut().enumerate() {
+            let idx_a = vld1q_u8(DEC_IDX_A[k].as_ptr());
+            let idx_b = vld1q_u8(DEC_IDX_B[k].as_ptr());
+            *row = vreinterpretq_s16_u8(vorrq_u8(vqtbl4q_u8(a, idx_a), vqtbl4q_u8(b, idx_b)));
+        }
+        rows
     }
 }
 

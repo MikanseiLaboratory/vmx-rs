@@ -2,7 +2,7 @@
 
 use crate::bitrate::{adjust_bitrate, lookup_bitrate};
 use crate::codec::slice::{
-    PlaneBuffers, SliceSet, decode_slices, encode_slices, encode_slices_fused_bgra,
+    PlaneBuffers, SliceSet, decode_slices_fused_packed422, encode_slices, encode_slices_fused_bgra,
     encode_slices_fused_packed422,
 };
 use crate::color::convert::{
@@ -352,19 +352,6 @@ impl Codec {
         );
     }
 
-    fn decode_planes(&mut self) {
-        let dc_shift = self.dc_shift;
-        let idx = self.decode_matrix_idx;
-        decode_slices(
-            self.simd_path,
-            &mut self.planes,
-            &mut self.slices,
-            &self.decode_presets[idx],
-            dc_shift,
-            Some(&self.pool),
-        );
-    }
-
     pub fn save_to(&mut self, dst: &mut [u8]) -> Result<usize> {
         let len = save_to(dst, &self.slices, self.format, self.quality, self.dc_shift)?;
         adjust_bitrate(
@@ -404,19 +391,30 @@ impl Codec {
 
     pub fn decode_uyvy(&mut self, dst: &mut [u8], stride: usize) -> Result<()> {
         self.validate_output(dst, stride, 2)?;
-        self.decode_planes();
-        planar_to_uyvy(
-            &self.planes.data[0],
-            self.planes.stride[0],
-            &self.planes.data[1],
-            self.planes.stride[1],
-            &self.planes.data[2],
-            self.planes.stride[2],
+        self.decode_fused_packed422(dst, stride, false);
+        Ok(())
+    }
+
+    /// Decode straight into packed 4:2:2.
+    ///
+    /// The picture is converted per slice, while the rows are still in cache. Doing
+    /// it afterwards is a second pass over the whole frame, single threaded, and it
+    /// was most of what stopped the decode from getting faster with more threads.
+    fn decode_fused_packed422(&mut self, dst: &mut [u8], stride: usize, yuy2: bool) {
+        let dc_shift = self.dc_shift;
+        let idx = self.decode_matrix_idx;
+        decode_slices_fused_packed422(
+            self.simd_path,
+            &mut self.planes,
+            &mut self.slices,
+            &self.decode_presets[idx],
+            dc_shift,
+            Some(&self.pool),
             dst,
             stride,
-            self.size,
+            self.size.width,
+            yuy2,
         );
-        Ok(())
     }
 
     fn validate_output(&self, dst: &[u8], stride: usize, bpp: usize) -> Result<()> {
@@ -478,18 +476,7 @@ impl Codec {
 
     pub fn decode_yuy2(&mut self, dst: &mut [u8], stride: usize) -> Result<()> {
         self.validate_output(dst, stride, 2)?;
-        self.decode_planes();
-        planar_to_yuy2(
-            &self.planes.data[0],
-            self.planes.stride[0],
-            &self.planes.data[1],
-            self.planes.stride[1],
-            &self.planes.data[2],
-            self.planes.stride[2],
-            dst,
-            stride,
-            self.size,
-        );
+        self.decode_fused_packed422(dst, stride, true);
         Ok(())
     }
 

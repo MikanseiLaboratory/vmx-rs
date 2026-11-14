@@ -22,7 +22,7 @@ use crate::tables::{
     FDCT_ROUND1, FDCT_SQRT2, FDCT_TAN1, FDCT_TAN2, FDCT_TAN3, FTAB1_128, FTAB2_128, FTAB3_128,
     FTAB4_128, IDCT_COS4, IDCT_ROW_TABLES, IDCT_TG1, IDCT_TG2, IDCT_TG3, IRND_INV_COL,
     IRND_INV_CORR, IRND_INV_ROW, RND_FRW_ROW, SHIFT_FRW_COL, SHIFT_FRW_ROW, SHIFT_INV_COL,
-    SHIFT_INV_ROW, ZIGZAG_INV,
+    SHIFT_INV_ROW,
 };
 #[cfg(target_arch = "aarch64")]
 use crate::types::SLICE_HEIGHT;
@@ -140,6 +140,100 @@ unsafe fn fdct_row_neon(input: int16x8_t, ftab: &[i16; 32]) -> int16x8_t {
     }
 }
 
+/// Byte indices used to gather raster-ordered coefficients into zigzag order.
+///
+/// `A` selects bytes from rows 0..3, `B` from rows 4..7; `0xFF` marks a byte
+/// taken from the other half (`vqtbl4q_u8` yields 0 for it).
+#[cfg(target_arch = "aarch64")]
+const ZIG_IDX_A: [[u8; 16]; 8] = [
+    [0, 1, 2, 3, 16, 17, 32, 33, 18, 19, 4, 5, 6, 7, 20, 21],
+    [
+        34, 35, 48, 49, 255, 255, 50, 51, 36, 37, 22, 23, 8, 9, 10, 11,
+    ],
+    [
+        24, 25, 38, 39, 52, 53, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+    ],
+    [
+        54, 55, 40, 41, 26, 27, 12, 13, 14, 15, 28, 29, 42, 43, 56, 57,
+    ],
+    [
+        255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+    ],
+    [
+        58, 59, 44, 45, 30, 31, 46, 47, 60, 61, 255, 255, 255, 255, 255, 255,
+    ],
+    [
+        255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 62, 63, 255, 255, 255, 255,
+    ],
+    [
+        255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+    ],
+];
+
+#[cfg(target_arch = "aarch64")]
+const ZIG_IDX_B: [[u8; 16]; 8] = [
+    [
+        255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+    ],
+    [
+        255, 255, 255, 255, 0, 1, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+    ],
+    [
+        255, 255, 255, 255, 255, 255, 2, 3, 16, 17, 32, 33, 18, 19, 4, 5,
+    ],
+    [
+        255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+    ],
+    [6, 7, 20, 21, 34, 35, 48, 49, 50, 51, 36, 37, 22, 23, 8, 9],
+    [
+        255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 10, 11, 24, 25, 38, 39,
+    ],
+    [
+        52, 53, 54, 55, 40, 41, 26, 27, 12, 13, 255, 255, 14, 15, 28, 29,
+    ],
+    [
+        42, 43, 56, 57, 58, 59, 44, 45, 30, 31, 46, 47, 60, 61, 62, 63,
+    ],
+];
+
+/// Permute eight raster-ordered coefficient rows into zigzag order and return
+/// the non-zero mask (bit `i` set when zigzag position `i` is non-zero).
+#[cfg(target_arch = "aarch64")]
+#[inline]
+#[target_feature(enable = "neon")]
+unsafe fn zigzag_permute_neon(rows: &[int16x8_t; 8], out: *mut i16) -> u64 {
+    unsafe {
+        const WEIGHTS: [u8; 8] = [1, 2, 4, 8, 16, 32, 64, 128];
+        let weights = vld1_u8(WEIGHTS.as_ptr());
+        let mut mask = 0u64;
+        let a = uint8x16x4_t(
+            vreinterpretq_u8_s16(rows[0]),
+            vreinterpretq_u8_s16(rows[1]),
+            vreinterpretq_u8_s16(rows[2]),
+            vreinterpretq_u8_s16(rows[3]),
+        );
+        let b = uint8x16x4_t(
+            vreinterpretq_u8_s16(rows[4]),
+            vreinterpretq_u8_s16(rows[5]),
+            vreinterpretq_u8_s16(rows[6]),
+            vreinterpretq_u8_s16(rows[7]),
+        );
+        for k in 0..8 {
+            let idx_a = vld1q_u8(ZIG_IDX_A[k].as_ptr());
+            let idx_b = vld1q_u8(ZIG_IDX_B[k].as_ptr());
+            let v = vorrq_u8(vqtbl4q_u8(a, idx_a), vqtbl4q_u8(b, idx_b));
+            let coeffs = vreinterpretq_s16_u8(v);
+            vst1q_s16(out.add(k * 8), coeffs);
+            // Non-zero lanes -> 0xFFFF; narrow to 0/1 bytes, weight them and
+            // reduce so each group of eight coefficients becomes one byte.
+            let nz = vreinterpretq_s16_u16(vtstq_s16(coeffs, coeffs));
+            let bits = vreinterpret_u8_s8(vmovn_s16(nz));
+            mask |= (vaddv_u8(vand_u8(bits, weights)) as u64) << (8 * k);
+        }
+        mask & !1
+    }
+}
+
 /// Forward DCT, quantization and zigzag scan (NEON port of `fdct_quant_zig_sse`).
 ///
 /// # Safety
@@ -153,7 +247,7 @@ pub unsafe fn fdct_quant_zig_neon(
     matrix: *const u16,
     add_val: i16,
     out: &mut [i16; 64],
-) {
+) -> u64 {
     unsafe {
         let mut rows = [
             vreinterpretq_s16_u16(vmovl_u8(vld1_u8(src))),
@@ -254,13 +348,7 @@ pub unsafe fn fdct_quant_zig_neon(
             *row = sign_epi16_neon(q, *row);
         }
 
-        let mut spatial = [0i16; 64];
-        for (i, row) in transformed.iter().enumerate() {
-            vst1q_s16(spatial.as_mut_ptr().add(i * 8), *row);
-        }
-        for i in 0..64 {
-            out[ZIGZAG_INV[i] as usize] = spatial[i];
-        }
+        zigzag_permute_neon(&transformed, out.as_mut_ptr())
     }
 }
 
@@ -325,7 +413,7 @@ unsafe fn encode_plane_neon(
                 if src_off + 7 * plane.stride + 8 > plane.data.len() {
                     continue;
                 }
-                fdct_quant_zig_neon(
+                let m_index = fdct_quant_zig_neon(
                     plane.data.as_ptr().add(src_off),
                     plane.stride,
                     encode_matrix.as_ptr(),
@@ -333,14 +421,6 @@ unsafe fn encode_plane_neon(
                     temp_block,
                 );
                 let dc_val = temp_block[0].wrapping_add(dc_round) >> dc_shift;
-
-                // Build the non-zero AC mask in one pass over the zigzag scan.
-                // The symbol table is not materialised: each non-zero
-                // coefficient is visited exactly once by the AC loop below.
-                let mut m_index = 0u64;
-                for (i, &coeff) in temp_block.iter().enumerate().skip(1) {
-                    m_index |= ((coeff != 0) as u64) << i;
-                }
 
                 dc.encode_dc(dc_val.wrapping_sub(dc_pred));
                 dc.emit_bits32();
@@ -811,7 +891,13 @@ mod tests {
             let mut actual = [0i16; 64];
             fdct_quant_zig(&src, stride, &matrix, add_val, &mut expected);
             unsafe {
-                fdct_quant_zig_neon(src.as_ptr(), stride, matrix.as_ptr(), add_val, &mut actual);
+                let _mask = fdct_quant_zig_neon(
+                    src.as_ptr(),
+                    stride,
+                    matrix.as_ptr(),
+                    add_val,
+                    &mut actual,
+                );
             }
             assert_eq!(actual, expected, "add_val {add_val}");
         }

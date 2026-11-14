@@ -64,10 +64,10 @@ Selection priority:
 
 ## Install
 
-The crates.io package is [`vmx1`](https://crates.io/crates/vmx1). The name `vmx` belongs to an unrelated crate. The Rust import path stays `vmx`.
+The crates.io package is [`vmx`](https://crates.io/crates/vmx).
 
 ```toml
-vmx1 = "0.2"
+vmx = "0.2"
 ```
 
 ## Usage

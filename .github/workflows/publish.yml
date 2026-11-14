@@ -1,4 +1,4 @@
-# Publishes the crates.io package `vmx1` when a version tag is pushed.
+# Publishes the crates.io package `vmx` when a version tag is pushed.
 # Trusted Publishing (https://crates.io/docs/trusted-publishing), after 0.1.0
 # exists on crates.io:
 #   owner: MikanseiLaboratory

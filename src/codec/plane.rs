@@ -1,6 +1,6 @@
 //! Plane encode/decode orchestration (scalar path).
 
-use crate::bitstream::{SliceData, get_2mag_sign, get_int_from_2mag_sign};
+use crate::bitstream::{SliceData, get_int_from_2mag_sign, golomb_symbol};
 use crate::codec::dct::{broadcast_dc, fdct_quant_zig, zig_invquant_idct};
 use crate::types::SLICE_HEIGHT;
 
@@ -70,11 +70,10 @@ pub fn encode_plane_scalar(
                 continue;
             }
 
-            // Convert AC to 2mag+1 in place for coding
-            let mut coded = [0u32; 64];
-            for i in 0..64 {
-                coded[i] = (get_2mag_sign(temp_block[i]) as u32).wrapping_add(1);
-            }
+            // AC symbols are converted lazily at their read points: only
+            // nonzero positions are ever encoded, so building a full 64-entry
+            // table per block was mostly discarded work. (The NEON path has
+            // always done this.)
 
             let mut pos = 0usize;
             let end = 64usize;
@@ -85,7 +84,7 @@ pub fn encode_plane_scalar(
                 ac.encode_zeros(&mut num_zeros);
                 ac.emit_bits32();
                 // after trailing zeros, bit at position nz is set
-                ac.encode_value(coded[nz as usize]);
+                ac.encode_value(golomb_symbol(temp_block[nz as usize]));
                 pos = nz as usize + 1;
                 m >>= nz;
                 m >>= 1;
@@ -95,7 +94,7 @@ pub fn encode_plane_scalar(
                     if m != 0 {
                         let nz = m.trailing_zeros() as u64;
                         ac.encode_zeros_small(nz);
-                        ac.encode_value(coded[pos + nz as usize]);
+                        ac.encode_value(golomb_symbol(temp_block[pos + nz as usize]));
                         pos += nz as usize + 1;
                         m >>= nz + 1;
                         ac.emit_bits32();
@@ -339,10 +338,8 @@ pub fn encode_plane_from_blocks(
                 continue;
             }
 
-            let mut coded = [0u32; 64];
-            for i in 0..64 {
-                coded[i] = (get_2mag_sign(temp_block[i]) as u32).wrapping_add(1);
-            }
+            // AC symbols are converted lazily at their read points (only
+            // nonzero positions are ever encoded).
 
             let mut pos = 0usize;
             let end = 64usize;
@@ -352,7 +349,7 @@ pub fn encode_plane_from_blocks(
                 num_zeros += nz as u32;
                 ac.encode_zeros(&mut num_zeros);
                 ac.emit_bits32();
-                ac.encode_value(coded[nz as usize]);
+                ac.encode_value(golomb_symbol(temp_block[nz as usize]));
                 pos = nz as usize + 1;
                 m >>= nz;
                 m >>= 1;
@@ -362,7 +359,7 @@ pub fn encode_plane_from_blocks(
                     if m != 0 {
                         let nz = m.trailing_zeros() as u64;
                         ac.encode_zeros_small(nz);
-                        ac.encode_value(coded[pos + nz as usize]);
+                        ac.encode_value(golomb_symbol(temp_block[pos + nz as usize]));
                         pos += nz as usize + 1;
                         m >>= nz + 1;
                         ac.emit_bits32();

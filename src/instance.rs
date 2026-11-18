@@ -134,11 +134,18 @@ impl Codec {
         let color_path = ColorSimdPath::detect();
 
         let aligned_height = align_up(height, 16);
-        let plane_len = y_stride * aligned_height as usize * 2;
-        let y = vec![0u8; plane_len];
-        let u = vec![128u8; plane_len];
-        let v = vec![128u8; plane_len];
-        let a = vec![255u8; plane_len];
+        // Size each plane to exactly what the slice offsets address. The old
+        // allocation gave every plane the (doubled) Y-stride length, so U/V
+        // carried 4x their need (1920x1080: 16.7 MB allocated for 6.3 MB used;
+        // 8K: 265 MB for 100 MB) and initialization touched all of it. The
+        // 16-bit formats that would have needed the doubling are still
+        // unimplemented.
+        let y_len = y_stride * aligned_height as usize;
+        let uv_len = uv_stride * aligned_height as usize;
+        let y = vec![0u8; y_len];
+        let u = vec![128u8; uv_len];
+        let v = vec![128u8; uv_len];
+        let a = vec![255u8; y_len];
 
         let slice_count = (aligned_height >> 4) as usize;
         let dc_len = y_stride * SLICE_HEIGHT as usize * 2;

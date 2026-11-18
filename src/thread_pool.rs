@@ -32,7 +32,11 @@ impl ThreadPool {
         self.thread_count
     }
 
-    /// Apply `f` to disjoint mutable chunks of `items` on this pool.
+    /// Apply `f` to every item of `items` on this pool.
+    ///
+    /// One task per item (each a single-element slice): slices finish
+    /// independently, so a long tail slice no longer blocks a whole static
+    /// chunk's worth of work.
     pub fn parallel_chunks_mut<T, F>(&self, items: &mut [T], f: F)
     where
         T: Send,
@@ -43,9 +47,10 @@ impl ThreadPool {
             f(items);
             return;
         }
-        let chunk_size = items.len().div_ceil(n);
         self.inner.install(|| {
-            items.par_chunks_mut(chunk_size).for_each(f);
+            items
+                .par_iter_mut()
+                .for_each(|item| f(std::slice::from_mut(item)));
         });
     }
 }

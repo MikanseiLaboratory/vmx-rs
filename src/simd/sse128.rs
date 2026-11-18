@@ -14,7 +14,7 @@ use crate::bitstream::SliceData;
 use crate::codec::plane::{PlaneView, decode_plane_scalar, encode_plane_scalar};
 
 #[cfg(target_arch = "x86_64")]
-use crate::bitstream::get_2mag_sign;
+use crate::bitstream::golomb_symbol;
 #[cfg(target_arch = "x86_64")]
 use crate::tables::{
     FDCT_ROUND1, FDCT_SQRT2, FDCT_TAN1, FDCT_TAN2, FDCT_TAN3, FTAB1_128, FTAB2_128, FTAB3_128,
@@ -288,23 +288,21 @@ unsafe fn encode_plane_sse(
                     continue;
                 }
 
-                let mut coded = [0u32; 64];
-                for i in 0..64 {
-                    coded[i] = (get_2mag_sign(temp_block[i]) as u32).wrapping_add(1);
-                }
+                // AC symbols are converted lazily at their read points; only
+                // nonzero positions are ever encoded (matches the NEON path).
                 let mut m = m_index;
                 let nz = m.trailing_zeros() as usize;
                 num_zeros += nz as u32;
                 ac.encode_zeros(&mut num_zeros);
                 ac.emit_bits32();
-                ac.encode_value(coded[nz]);
+                ac.encode_value(golomb_symbol(temp_block[nz]));
                 let mut pos = nz + 1;
                 m >>= nz + 1;
                 ac.emit_bits32();
                 while m != 0 {
                     let zeros = m.trailing_zeros() as usize;
                     ac.encode_zeros_small(zeros as u64);
-                    ac.encode_value(coded[pos + zeros]);
+                    ac.encode_value(golomb_symbol(temp_block[pos + zeros]));
                     pos += zeros + 1;
                     m >>= zeros + 1;
                     ac.emit_bits32();

@@ -316,15 +316,18 @@ fn ensure_pack_len(buf: &mut Vec<u8>, len: usize) {
 
 /// Entropy-decode all slices into one packed GPU coefficient buffer (Y then U then V).
 /// Returns `(y_bytes, u_bytes, v_bytes)`.
+///
+/// Runs on the codec's instance pool (honors `set_threads`) instead of the
+/// process-wide rayon pool, matching the CPU decode paths.
 #[cfg(feature = "wgpu")]
 pub fn decode_slices_coeffs(
+    pool: &ThreadPool,
     slices: &mut [SliceSet],
     strides: [usize; 3],
     dc_shift: i32,
     pack: &mut Vec<u8>,
 ) -> (usize, usize, usize) {
     use crate::gpu::pack::PACK_BYTES;
-    use rayon::prelude::*;
 
     let n_slices = slices.len();
     let blocks_per_slice = |stride: usize| (stride / 8) * (SLICE_HEIGHT as usize / 8);
@@ -337,7 +340,7 @@ pub fn decode_slices_coeffs(
     ensure_pack_len(pack, y_len + u_len + v_len);
     let pack_ptr = pack.as_mut_ptr() as usize;
 
-    slices.par_iter_mut().enumerate().for_each(|(i, slice)| {
+    pool.parallel_enumerate_mut(slices, |i, slice| {
         prepare_slice_bitstream(slice);
         // SAFETY: each slice writes disjoint Y/U/V windows in the concatenated pack.
         let y_out = unsafe {
@@ -398,8 +401,12 @@ fn i16_as_blocks(vals: &[i16]) -> &[[i16; 64]] {
 }
 
 /// Golomb-encode full-frame zigzag blocks from a mapped `[y|u|v|a]` i16 stream.
+///
+/// Runs on the codec's instance pool (honors `set_threads`) instead of the
+/// process-wide rayon pool, matching the CPU encode paths.
 #[cfg(feature = "wgpu")]
 pub fn encode_slices_from_coeffs(
+    pool: &ThreadPool,
     slices: &mut [SliceSet],
     strides: [usize; 4],
     coeffs: &[i16],
@@ -408,8 +415,6 @@ pub fn encode_slices_from_coeffs(
     a_n: usize,
     dc_shift: i32,
 ) {
-    use rayon::prelude::*;
-
     let y_blocks = i16_as_blocks(&coeffs[..y_n]);
     let u_blocks = i16_as_blocks(&coeffs[y_n..y_n + u_n]);
     let v_blocks = i16_as_blocks(&coeffs[y_n + u_n..y_n + u_n * 2]);
@@ -425,7 +430,7 @@ pub fn encode_slices_from_coeffs(
     let by_per_slice = (SLICE_HEIGHT as usize) / 8;
     let encode_alpha = a_n > 0;
 
-    slices.par_iter_mut().enumerate().for_each(|(si, slice)| {
+    pool.parallel_enumerate_mut(slices, |si, slice| {
         slice.reset();
         let y0 = si * by_per_slice * y_bx;
         let y1 = y0 + by_per_slice * y_bx;

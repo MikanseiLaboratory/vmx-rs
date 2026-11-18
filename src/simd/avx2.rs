@@ -6,7 +6,11 @@
 #![allow(dead_code)]
 
 use crate::bitstream::SliceData;
-use crate::codec::plane::{PlaneView, decode_plane_scalar, encode_plane_scalar};
+use crate::codec::plane::PlaneView;
+#[cfg(target_arch = "x86_64")]
+use crate::codec::plane::encode_plane_scalar;
+#[cfg(not(target_arch = "x86_64"))]
+use crate::codec::plane::{decode_plane_scalar, encode_plane_scalar};
 
 #[cfg(target_arch = "x86_64")]
 use crate::bitstream::golomb_symbol;
@@ -498,7 +502,7 @@ unsafe fn zig_invquant_idct_avx2(
     }
 }
 
-/// Encode using AVX2+BMI2 when available.
+/// Encode using the AVX2+BMI2 path when it was selected at construction.
 pub fn encode_plane(
     plane: &PlaneView<'_>,
     dc: &mut SliceData,
@@ -509,17 +513,22 @@ pub fn encode_plane(
 ) {
     #[cfg(target_arch = "x86_64")]
     {
-        if is_x86_feature_detected!("avx2") && is_x86_feature_detected!("bmi2") {
-            // SAFETY: features detected; same buffer contracts as scalar path.
-            return unsafe {
-                encode_plane_avx2(plane, dc, ac, encode_matrix, dc_shift, temp_block);
-            };
+        // SAFETY: `SimdPath::Avx2` is only handed out by `Codec::new` after
+        // detecting AVX2+BMI2 (see `SimdCapabilities::select_path`), and every
+        // AVX2 CPU ships the SSE4.2 that the single-block fallback inside uses.
+        // Re-running CPUID per plane call only added atomic loads and call
+        // boundaries on the hot path; same buffer contracts as the scalar path.
+        unsafe {
+            encode_plane_avx2(plane, dc, ac, encode_matrix, dc_shift, temp_block);
         }
     }
-    encode_plane_scalar(plane, dc, ac, encode_matrix, dc_shift, temp_block);
+    #[cfg(not(target_arch = "x86_64"))]
+    {
+        encode_plane_scalar(plane, dc, ac, encode_matrix, dc_shift, temp_block);
+    }
 }
 
-/// Decode using AVX2+BMI2 when available.
+/// Decode using the AVX2+BMI2 path when it was selected at construction.
 pub fn decode_plane(
     plane: &mut PlaneView<'_>,
     dc: &mut SliceData,
@@ -530,13 +539,14 @@ pub fn decode_plane(
 ) {
     #[cfg(target_arch = "x86_64")]
     {
-        if is_x86_feature_detected!("avx2") && is_x86_feature_detected!("bmi2") {
-            return unsafe {
-                decode_plane_avx2(plane, dc, ac, decode_matrix, dc_shift, temp_block)
-            };
-        }
+        // SAFETY: `SimdPath::Avx2` implies AVX2+BMI2 were detected at
+        // `Codec::new`; no per-call CPUID.
+        unsafe { decode_plane_avx2(plane, dc, ac, decode_matrix, dc_shift, temp_block) }
     }
-    decode_plane_scalar(plane, dc, ac, decode_matrix, dc_shift, temp_block);
+    #[cfg(not(target_arch = "x86_64"))]
+    {
+        decode_plane_scalar(plane, dc, ac, decode_matrix, dc_shift, temp_block);
+    }
 }
 
 #[cfg(target_arch = "x86_64")]
@@ -551,7 +561,8 @@ unsafe fn encode_plane_avx2(
 ) {
     use crate::simd::sse128::fdct_quant_zig_sse;
 
-    // SAFETY: caller verified AVX2+BMI2.
+    // SAFETY: the entry point dispatches only on the pre-selected Avx2 path
+    // (AVX2+BMI2 detected once at `Codec::new`).
     unsafe {
         if encode_matrix.len() < 192 {
             return encode_plane_scalar(plane, dc, ac, encode_matrix, dc_shift, temp_block);
@@ -732,7 +743,8 @@ unsafe fn decode_plane_avx2(
     use crate::codec::dct::broadcast_dc;
     use crate::simd::sse128::zig_invquant_idct_sse;
 
-    // SAFETY: caller verified AVX2+BMI2.
+    // SAFETY: the entry point dispatches only on the pre-selected Avx2 path
+    // (AVX2+BMI2 detected once at `Codec::new`).
     unsafe {
         let height = SLICE_HEIGHT as usize;
         let add_val: i16 = if plane.index == 0 || plane.index == 3 {

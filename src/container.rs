@@ -155,6 +155,12 @@ pub fn save_to(
 
     for s in slices {
         let len = s.dc.encoded_length();
+        // A slice whose entropy data overflowed its preallocated stream was
+        // silently truncated at write time (writes clamp to the buffer). Emit
+        // an error instead of packaging a corrupt frame.
+        if len > s.dc.stream.len() {
+            return Err(VmxError::BufferOverflow);
+        }
         if b + 4 + len > dst.len() {
             return Err(VmxError::BufferOverflow);
         }
@@ -165,6 +171,9 @@ pub fn save_to(
     }
     for s in slices {
         let len = s.ac.encoded_length();
+        if len > s.ac.stream.len() {
+            return Err(VmxError::BufferOverflow);
+        }
         if b + 4 + len > dst.len() {
             return Err(VmxError::BufferOverflow);
         }

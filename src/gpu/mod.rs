@@ -675,7 +675,13 @@ impl Codec {
         ];
         let t0 = std::time::Instant::now();
         let mut gpu = self.gpu.take().expect("gpu");
-        decode_slices_coeffs(&mut self.slices, strides, self.dc_shift, &mut gpu.pack);
+        decode_slices_coeffs(
+            &self.pool,
+            &mut self.slices,
+            strides,
+            self.dc_shift,
+            &mut gpu.pack,
+        );
         self.gpu = Some(gpu);
         let t1 = std::time::Instant::now();
         let idx = self.decode_matrix_idx;
@@ -1105,6 +1111,7 @@ impl Codec {
             device,
             &gpu.coeff_read[pending.slot],
             &pending.index,
+            &self.pool,
             &mut self.slices,
             [
                 self.planes.stride[0],
@@ -1131,6 +1138,7 @@ fn encode_from_mapped(
     device: &wgpu::Device,
     buf: &wgpu::Buffer,
     index: &wgpu::SubmissionIndex,
+    pool: &crate::thread_pool::ThreadPool,
     slices: &mut [crate::codec::slice::SliceSet],
     strides: [usize; 4],
     y_n: usize,
@@ -1148,7 +1156,7 @@ fn encode_from_mapped(
             .get_mapped_range()
             .map_err(|e| gpu_err(format!("coeff map: {e}")))?;
         let vals: &[i16] = bytemuck::cast_slice(&data);
-        encode_slices_from_coeffs(slices, strides, vals, y_n, u_n, a_n, dc_shift);
+        encode_slices_from_coeffs(pool, slices, strides, vals, y_n, u_n, a_n, dc_shift);
     }
     buf.unmap();
     Ok(())

@@ -53,4 +53,30 @@ impl ThreadPool {
                 .for_each(|item| f(std::slice::from_mut(item)));
         });
     }
+
+    /// Apply `f(index, item)` to every item of `items` on this pool.
+    ///
+    /// One task per item; the sequential fallback covers single-thread pools
+    /// and trivial inputs. Used by the wgpu coefficient paths, which need the
+    /// slice index to address disjoint windows of the shared pack buffer.
+    #[cfg(feature = "wgpu")]
+    pub fn parallel_enumerate_mut<T, F>(&self, items: &mut [T], f: F)
+    where
+        T: Send,
+        F: Fn(usize, &mut T) + Sync + Send,
+    {
+        let n = self.thread_count;
+        if n <= 1 || items.len() <= 1 {
+            for (i, item) in items.iter_mut().enumerate() {
+                f(i, item);
+            }
+            return;
+        }
+        self.inner.install(|| {
+            items
+                .par_iter_mut()
+                .enumerate()
+                .for_each(|(i, item)| f(i, item));
+        });
+    }
 }

@@ -72,7 +72,7 @@ pub struct Codec {
     aligned_height: i32,
     target_bytes_min: i32,
     target_bytes_max: i32,
-    pool: ThreadPool,
+    pub(crate) pool: ThreadPool,
     pub(crate) preview_size: Size,
     pub(crate) image_format: ImageFormat,
     #[cfg(feature = "wgpu")]

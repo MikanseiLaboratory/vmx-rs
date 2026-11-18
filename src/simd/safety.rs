@@ -2,9 +2,14 @@
 //!
 //! # Safety requirements
 //!
-//! - All `std::arch` intrinsics are gated by `is_x86_feature_detected!` /
-//!   `is_aarch64_feature_detected!` (or aarch64 baseline NEON) before
-//!   `#[target_feature]` kernels are invoked.
+//! - All `std::arch` intrinsics run only after the required features are known
+//!   present. The DCT plane kernels are gated **once**: `Codec::new` detects the
+//!   host features and hands the pre-selected [`crate::simd::SimdPath`] to the
+//!   slice loops, whose entry points trust that choice and never re-run CPUID.
+//!   (SSE4.2 implies SSE4.1 and AVX2 implies SSE4.2 on every shipping CPU; the
+//!   AVX2 decode fallback already relied on that.) aarch64 uses baseline NEON.
+//!   Color conversion helpers that do not receive a preselected path still
+//!   detect features per call.
 //! - Callers must ensure plane buffers have length covering
 //!   `offset + slice_height * stride`.
 //! - Hardware capabilities are stored separately from the selected [`crate::simd::SimdPath`].

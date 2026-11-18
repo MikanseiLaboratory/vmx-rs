@@ -44,6 +44,24 @@ fn main() {
     let noise = args.get(4).map(|value| value == "noise").unwrap_or(false);
     let streams: usize = args.get(5).and_then(|v| v.parse().ok()).unwrap_or(0);
     let mode = args.get(6).cloned().unwrap_or_else(|| "both".into());
+    // VMX_SHARED_POOL=<n>: every codec shares one slice pool with <n> workers
+    // ("1" or unset count = machine default), so the multi-stream sections
+    // measure the shared-budget behavior instead of N codecs each running
+    // their own worker set.
+    if let Some(value) = std::env::var_os("VMX_SHARED_POOL") {
+        let threads = value
+            .to_str()
+            .and_then(|s| s.parse::<usize>().ok())
+            .filter(|n| *n > 1);
+        vmx::use_shared_thread_pool(threads);
+        let described = match threads {
+            Some(n) => n,
+            None => std::thread::available_parallelism()
+                .map(|n| n.get())
+                .unwrap_or(0),
+        };
+        println!("shared slice pool: on ({described} threads)");
+    }
     let pixels = frame(width, height, noise);
     let stride = (width * 2) as usize;
     println!(

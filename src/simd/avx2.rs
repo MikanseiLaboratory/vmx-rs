@@ -54,8 +54,12 @@ unsafe fn fdct_row_avx2(input: __m256i, ftab: &[i16; 64]) -> __m256i {
 
 // Dual FDCT
 
+/// Dual FDCT + quant + zigzag for two horizontally adjacent 8×8 blocks.
+///
+/// Returns the per-block AC-nonzero masks (bit 0 / DC clear) so the entropy
+/// stage does not rescan the zigzag output.
 #[cfg(target_arch = "x86_64")]
-#[target_feature(enable = "avx2")]
+#[target_feature(enable = "avx2,bmi2")]
 unsafe fn fdct_quant_zig_avx2(
     src: *const u8,
     stride: usize,
@@ -63,10 +67,10 @@ unsafe fn fdct_quant_zig_avx2(
     add_val: i16,
     out_left: &mut [i16; 64],
     out_right: &mut [i16; 64],
-) {
+) -> (u64, u64) {
     use crate::tables::{
         FDCT_ROUND1, FDCT_SQRT2, FDCT_TAN1, FDCT_TAN2, FDCT_TAN3, FTAB1_256, FTAB2_256, FTAB3_256,
-        FTAB4_256, SHIFT_FRW_COL, ZIGZAG_INV,
+        FTAB4_256, SHIFT_FRW_COL,
     };
 
     unsafe {
@@ -155,12 +159,16 @@ unsafe fn fdct_quant_zig_avx2(
         let mut transformed = [in0, in1, in2, in3, in4, in5, in6, in7];
         for (row_idx, row) in transformed.iter_mut().enumerate() {
             let off = row_idx * 8;
-            let corr128 = _mm_loadu_si128(matrix.add(off).cast::<__m128i>());
-            let corr = _mm256_inserti128_si256(_mm256_castsi128_si256(corr128), corr128, 1);
-            let recp128 = _mm_loadu_si128(matrix.add(64 + off).cast::<__m128i>());
-            let recp = _mm256_inserti128_si256(_mm256_castsi128_si256(recp128), recp128, 1);
-            let scl128 = _mm_loadu_si128(matrix.add(128 + off).cast::<__m128i>());
-            let scl = _mm256_inserti128_si256(_mm256_castsi128_si256(scl128), scl128, 1);
+            // One broadcast per matrix row instead of a load + insert: the
+            // insert competes for the shuffle port the FDCT rows also need.
+            let corr =
+                _mm256_broadcastsi128_si256(_mm_loadu_si128(matrix.add(off).cast::<__m128i>()));
+            let recp = _mm256_broadcastsi128_si256(_mm_loadu_si128(
+                matrix.add(64 + off).cast::<__m128i>(),
+            ));
+            let scl = _mm256_broadcastsi128_si256(_mm_loadu_si128(
+                matrix.add(128 + off).cast::<__m128i>(),
+            ));
             let mut q = _mm256_abs_epi16(*row);
             q = _mm256_add_epi16(q, corr);
             q = _mm256_mulhi_epu16(q, recp);
@@ -168,23 +176,180 @@ unsafe fn fdct_quant_zig_avx2(
             *row = _mm256_sign_epi16(q, *row);
         }
 
-        let mut spatial_left = [0i16; 64];
-        let mut spatial_right = [0i16; 64];
-        for (i, row) in transformed.iter().enumerate() {
-            _mm_storeu_si128(
-                spatial_left.as_mut_ptr().add(i * 8).cast(),
-                _mm256_castsi256_si128(*row),
-            );
-            _mm_storeu_si128(
-                spatial_right.as_mut_ptr().add(i * 8).cast(),
-                _mm256_extracti128_si256(*row, 1),
-            );
+        // Fused zigzag gather + AC mask: no stack round trip, no rescan.
+        zigzag_permute_mask_avx2(&transformed, out_left, out_right)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Dual-block zigzag gather + AC mask (encode side).
+//
+// Mirrors `zigzag_permute_neon` on aarch64: the dequantized dual-block rows
+// are gathered straight into zigzag order and the nonzero mask is extracted
+// from the same registers. The x86 paths used to store the rows to stack
+// arrays, run a 64-iteration scalar scatter, and then rescan the result for
+// the mask.
+
+/// Raster position feeding zigzag index `q`; the exact inverse of the
+/// `out[ZIGZAG_INV[r]] = spatial[r]` scatter the scalar paths perform.
+#[cfg(target_arch = "x86_64")]
+const fn zigzag_src_index() -> [u8; 64] {
+    let mut src = [0u8; 64];
+    let mut r = 0;
+    while r < 64 {
+        src[crate::tables::ZIGZAG_INV[r] as usize] = r as u8;
+        r += 1;
+    }
+    src
+}
+
+/// pshufb controls gathering one 16-coefficient zigzag chunk (`k`) from one
+/// row pair (rows `2j` and `2j+1`). `swapped = false` targets the register
+/// whose 128-bit lanes hold `[row 2j, row 2j+1]`; `swapped = true` targets the
+/// lane-swapped register `[row 2j+1, row 2j]`, because pshufb cannot cross
+/// 128-bit lanes and a row has to sit in the output lane it feeds. Bytes not
+/// sourced from this register zero out and the partial chunks OR together.
+#[cfg(target_arch = "x86_64")]
+const fn zigzag_ctrl(k: usize, j: usize, swapped: bool) -> [u8; 32] {
+    let src = zigzag_src_index();
+    let mut ctrl = [0x80u8; 32];
+    let mut b = 0;
+    while b < 32 {
+        let lane = b / 16;
+        let q = 16 * k + b / 2;
+        let parity = b % 2;
+        let r = src[q] as usize;
+        let holder = if swapped {
+            2 * j + (1 - lane)
+        } else {
+            2 * j + lane
+        };
+        if r / 8 == holder {
+            ctrl[b] = ((r % 8) * 2 + parity) as u8;
         }
-        for i in 0..64 {
-            let zi = ZIGZAG_INV[i] as usize;
-            out_left[zi] = spatial_left[i];
-            out_right[zi] = spatial_right[i];
+        b += 1;
+    }
+    ctrl
+}
+
+#[cfg(target_arch = "x86_64")]
+const fn zigzag_ctrl_any(k: usize, j: usize, swapped: bool) -> bool {
+    let ctrl = zigzag_ctrl(k, j, swapped);
+    let mut any = false;
+    let mut b = 0;
+    while b < 32 {
+        if ctrl[b] != 0x80 {
+            any = true;
         }
+        b += 1;
+    }
+    any
+}
+
+/// Per-chunk pshufb controls: `[k][j]` → 32 control bytes.
+#[cfg(target_arch = "x86_64")]
+type ZigCtrlTable = [[[u8; 32]; 4]; 4];
+/// Per-chunk flags: `[k][j]` → the row pair contributes to that chunk.
+#[cfg(target_arch = "x86_64")]
+type ZigCtrlFlags = [[bool; 4]; 4];
+
+/// `[k][j]` pshufb controls for both lane arrangements plus per-pair flags
+/// telling which registers actually contribute to each chunk (compile-time
+/// known, so dead shuffles fold away).
+#[cfg(target_arch = "x86_64")]
+const fn zigzag_ctrl_tables() -> (ZigCtrlTable, ZigCtrlTable, ZigCtrlFlags, ZigCtrlFlags) {
+    let mut aligned = [[[0x80u8; 32]; 4]; 4];
+    let mut swapped = [[[0x80u8; 32]; 4]; 4];
+    let mut aligned_any = [[false; 4]; 4];
+    let mut swapped_any = [[false; 4]; 4];
+    let mut k = 0;
+    while k < 4 {
+        let mut j = 0;
+        while j < 4 {
+            aligned[k][j] = zigzag_ctrl(k, j, false);
+            swapped[k][j] = zigzag_ctrl(k, j, true);
+            aligned_any[k][j] = zigzag_ctrl_any(k, j, false);
+            swapped_any[k][j] = zigzag_ctrl_any(k, j, true);
+            j += 1;
+        }
+        k += 1;
+    }
+    (aligned, swapped, aligned_any, swapped_any)
+}
+
+#[cfg(target_arch = "x86_64")]
+const ZIG_CTRL: (ZigCtrlTable, ZigCtrlTable, ZigCtrlFlags, ZigCtrlFlags) = zigzag_ctrl_tables();
+
+/// Gather two dequantized blocks into zigzag order and build their AC masks.
+///
+/// `rows` holds eight dual-block rows (left block in the low 128-bit lane,
+/// right block in the high lane). Returns the nonzero masks with bit 0 (DC)
+/// cleared, matching `ac_nonzero_mask_avx2`.
+///
+/// # Safety
+/// Caller must enable AVX2 + BMI2.
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx2,bmi2")]
+unsafe fn zigzag_permute_mask_avx2(
+    rows: &[__m256i; 8],
+    out_left: &mut [i16; 64],
+    out_right: &mut [i16; 64],
+) -> (u64, u64) {
+    // SAFETY: caller verified AVX2+BMI2; outputs are 64 i16 each.
+    unsafe {
+        // Row-pair sources per side: [row 2j, row 2j+1] per lane block plus
+        // the lane-swapped variant, so either row can feed either output lane.
+        let mut pair_l = [_mm256_setzero_si256(); 4];
+        let mut pair_l_swap = [_mm256_setzero_si256(); 4];
+        let mut pair_r = [_mm256_setzero_si256(); 4];
+        let mut pair_r_swap = [_mm256_setzero_si256(); 4];
+        for j in 0..4 {
+            let a = rows[2 * j];
+            let b = rows[2 * j + 1];
+            pair_l[j] = _mm256_permute2x128_si256::<0x20>(a, b);
+            pair_l_swap[j] = _mm256_permute2x128_si256::<0x20>(b, a);
+            pair_r[j] = _mm256_permute2x128_si256::<0x31>(a, b);
+            pair_r_swap[j] = _mm256_permute2x128_si256::<0x31>(b, a);
+        }
+
+        let zero = _mm256_setzero_si256();
+        let mut mask_left = 0u64;
+        let mut mask_right = 0u64;
+        for k in 0..4 {
+            // One 16-coefficient zigzag chunk per side.
+            let mut chunk_l = zero;
+            let mut chunk_r = zero;
+            for j in 0..4 {
+                if ZIG_CTRL.2[k][j] {
+                    let ctrl = _mm256_loadu_si256(ZIG_CTRL.0[k][j].as_ptr().cast::<__m256i>());
+                    chunk_l = _mm256_or_si256(chunk_l, _mm256_shuffle_epi8(pair_l[j], ctrl));
+                    chunk_r = _mm256_or_si256(chunk_r, _mm256_shuffle_epi8(pair_r[j], ctrl));
+                }
+                if ZIG_CTRL.3[k][j] {
+                    let ctrl = _mm256_loadu_si256(ZIG_CTRL.1[k][j].as_ptr().cast::<__m256i>());
+                    chunk_l = _mm256_or_si256(chunk_l, _mm256_shuffle_epi8(pair_l_swap[j], ctrl));
+                    chunk_r = _mm256_or_si256(chunk_r, _mm256_shuffle_epi8(pair_r_swap[j], ctrl));
+                }
+            }
+            _mm256_storeu_si256(out_left.as_mut_ptr().add(16 * k).cast::<__m256i>(), chunk_l);
+            _mm256_storeu_si256(
+                out_right.as_mut_ptr().add(16 * k).cast::<__m256i>(),
+                chunk_r,
+            );
+            // Nonzero bits of the 16 packed coefficients (bit i set when
+            // coefficient 16k+i is nonzero).
+            let nz_left = {
+                let eq = _mm256_cmpeq_epi16(chunk_l, zero);
+                (!_pext_u32(_mm256_movemask_epi8(eq) as u32, 0x5555_5555)) & 0xFFFF
+            };
+            let nz_right = {
+                let eq = _mm256_cmpeq_epi16(chunk_r, zero);
+                (!_pext_u32(_mm256_movemask_epi8(eq) as u32, 0x5555_5555)) & 0xFFFF
+            };
+            mask_left |= u64::from(nz_left) << (16 * k);
+            mask_right |= u64::from(nz_right) << (16 * k);
+        }
+        (mask_left & !1, mask_right & !1)
     }
 }
 
@@ -300,45 +465,39 @@ unsafe fn inverse_zigzag_8x8_avx2(
 ) -> [__m256i; 8] {
     // SAFETY: AVX2 enabled; both coeff arrays are 64 i16.
     unsafe {
-        let mut a0 = _mm256_inserti128_si256(
-            _mm256_castsi128_si256(_mm_loadu_si128(coeffs_left.as_ptr().cast())),
-            _mm_loadu_si128(coeffs_right.as_ptr().cast()),
-            1,
+        // One 256-bit load per row: lo lane from the left block, hi lane from
+        // the right block (`loadu2` folds the load + insert pair).
+        let mut a0 = _mm256_loadu2_m128i(
+            coeffs_right.as_ptr().cast::<__m128i>(),
+            coeffs_left.as_ptr().cast::<__m128i>(),
         );
-        let mut a1 = _mm256_inserti128_si256(
-            _mm256_castsi128_si256(_mm_loadu_si128(coeffs_left.as_ptr().add(8).cast())),
-            _mm_loadu_si128(coeffs_right.as_ptr().add(8).cast()),
-            1,
+        let mut a1 = _mm256_loadu2_m128i(
+            coeffs_right.as_ptr().add(8).cast::<__m128i>(),
+            coeffs_left.as_ptr().add(8).cast::<__m128i>(),
         );
-        let mut a2 = _mm256_inserti128_si256(
-            _mm256_castsi128_si256(_mm_loadu_si128(coeffs_left.as_ptr().add(16).cast())),
-            _mm_loadu_si128(coeffs_right.as_ptr().add(16).cast()),
-            1,
+        let mut a2 = _mm256_loadu2_m128i(
+            coeffs_right.as_ptr().add(16).cast::<__m128i>(),
+            coeffs_left.as_ptr().add(16).cast::<__m128i>(),
         );
-        let mut a3 = _mm256_inserti128_si256(
-            _mm256_castsi128_si256(_mm_loadu_si128(coeffs_left.as_ptr().add(24).cast())),
-            _mm_loadu_si128(coeffs_right.as_ptr().add(24).cast()),
-            1,
+        let mut a3 = _mm256_loadu2_m128i(
+            coeffs_right.as_ptr().add(24).cast::<__m128i>(),
+            coeffs_left.as_ptr().add(24).cast::<__m128i>(),
         );
-        let mut a4 = _mm256_inserti128_si256(
-            _mm256_castsi128_si256(_mm_loadu_si128(coeffs_left.as_ptr().add(32).cast())),
-            _mm_loadu_si128(coeffs_right.as_ptr().add(32).cast()),
-            1,
+        let mut a4 = _mm256_loadu2_m128i(
+            coeffs_right.as_ptr().add(32).cast::<__m128i>(),
+            coeffs_left.as_ptr().add(32).cast::<__m128i>(),
         );
-        let mut a5 = _mm256_inserti128_si256(
-            _mm256_castsi128_si256(_mm_loadu_si128(coeffs_left.as_ptr().add(40).cast())),
-            _mm_loadu_si128(coeffs_right.as_ptr().add(40).cast()),
-            1,
+        let mut a5 = _mm256_loadu2_m128i(
+            coeffs_right.as_ptr().add(40).cast::<__m128i>(),
+            coeffs_left.as_ptr().add(40).cast::<__m128i>(),
         );
-        let a6_src = _mm256_inserti128_si256(
-            _mm256_castsi128_si256(_mm_loadu_si128(coeffs_left.as_ptr().add(48).cast())),
-            _mm_loadu_si128(coeffs_right.as_ptr().add(48).cast()),
-            1,
+        let a6_src = _mm256_loadu2_m128i(
+            coeffs_right.as_ptr().add(48).cast::<__m128i>(),
+            coeffs_left.as_ptr().add(48).cast::<__m128i>(),
         );
-        let a7_src = _mm256_inserti128_si256(
-            _mm256_castsi128_si256(_mm_loadu_si128(coeffs_left.as_ptr().add(56).cast())),
-            _mm_loadu_si128(coeffs_right.as_ptr().add(56).cast()),
-            1,
+        let a7_src = _mm256_loadu2_m128i(
+            coeffs_right.as_ptr().add(56).cast::<__m128i>(),
+            coeffs_left.as_ptr().add(56).cast::<__m128i>(),
         );
 
         // Lane-duplicated pshufb controls (same 16 bytes in lo/hi).
@@ -478,25 +637,27 @@ unsafe fn zig_invquant_idct_avx2(
     unsafe {
         let spatial = inverse_zigzag_8x8_avx2(coeffs_left, coeffs_right);
 
+        // Dequantize and run the IDCT row pass in one loop: no stack round
+        // trip, and the matrix row is lane-duplicated with one broadcast.
         let mut dct_rows = [_mm256_setzero_si256(); 8];
-        for (ri, dct_row) in dct_rows.iter_mut().enumerate() {
-            let m128 = _mm_loadu_si128(decode_matrix.as_ptr().add(ri * 8).cast());
-            let m = _mm256_inserti128_si256(_mm256_castsi128_si256(m128), m128, 1);
-            *dct_row = _mm256_srai_epi16(_mm256_mullo_epi16(spatial[ri], m), 4);
-        }
-
         for row in 0..8 {
-            dct_rows[row] = idct_row_avx2(dct_rows[row], IDCT_ROW_TABLES_256[row]);
+            let m = _mm256_broadcastsi128_si256(_mm_loadu_si128(
+                decode_matrix.as_ptr().add(row * 8).cast::<__m128i>(),
+            ));
+            let dq = _mm256_srai_epi16(_mm256_mullo_epi16(spatial[row], m), 4);
+            dct_rows[row] = idct_row_avx2(dq, IDCT_ROW_TABLES_256[row]);
         }
 
         let out_rows = idct_columns_8_avx2(dct_rows, add_val);
 
+        // `packus(row, row)` yields [left8, left8, right8, right8] per qword;
+        // one vpermq merges both blocks into a single 16-byte store per row.
         for (y, out_row) in out_rows.iter().enumerate() {
             let packed = _mm256_packus_epi16(*out_row, *out_row);
-            _mm_storel_epi64(dst.add(y * stride).cast(), _mm256_castsi256_si128(packed));
-            _mm_storel_epi64(
-                dst.add(y * stride + 8).cast(),
-                _mm256_extracti128_si256(packed, 1),
+            let merged = _mm256_permute4x64_epi64::<0x08>(packed);
+            _mm_storeu_si128(
+                dst.add(y * stride).cast::<__m128i>(),
+                _mm256_castsi256_si128(merged),
             );
         }
     }
@@ -593,7 +754,7 @@ unsafe fn encode_plane_avx2(
                 let dual = x + 16 <= stride && src_off + 7 * stride + 16 <= plane.data.len();
 
                 if dual {
-                    fdct_quant_zig_avx2(
+                    let (mask_left, mask_right) = fdct_quant_zig_avx2(
                         plane.data.as_ptr().add(src_off),
                         stride,
                         encode_matrix.as_ptr(),
@@ -604,6 +765,7 @@ unsafe fn encode_plane_avx2(
                     used_avx256 = true;
                     encode_fdct_block_avx2(
                         temp_block,
+                        mask_left,
                         dc,
                         ac,
                         dc_shift,
@@ -614,6 +776,7 @@ unsafe fn encode_plane_avx2(
                     );
                     encode_fdct_block_avx2(
                         &temp_block2,
+                        mask_right,
                         dc,
                         ac,
                         dc_shift,
@@ -635,8 +798,11 @@ unsafe fn encode_plane_avx2(
                         add_val,
                         temp_block,
                     );
+                    // Single-block (SSE-fed) tail keeps the standalone mask pass.
+                    let m_index = ac_nonzero_mask_avx2(temp_block);
                     encode_fdct_block_avx2(
                         temp_block,
+                        m_index,
                         dc,
                         ac,
                         dc_shift,
@@ -684,6 +850,7 @@ unsafe fn ac_nonzero_mask_avx2(coeffs: &[i16; 64]) -> u64 {
 #[target_feature(enable = "avx2,bmi2")]
 unsafe fn encode_fdct_block_avx2(
     temp_block: &[i16; 64],
+    m_index: u64,
     dc: &mut SliceData,
     ac: &mut SliceData,
     dc_shift: i32,
@@ -692,42 +859,40 @@ unsafe fn encode_fdct_block_avx2(
     num_zeros: &mut u32,
     used_avx256: &mut bool,
 ) {
-    // SAFETY: AVX2+BMI2 enabled.
-    unsafe {
-        let dc_val = temp_block[0].wrapping_add(dc_round) >> dc_shift;
-        let m_index = ac_nonzero_mask_avx2(temp_block);
-        *used_avx256 = true;
+    // The `unsafe fn` marker + target_feature keep callers on the
+    // feature-detected path; the body itself is plain safe code.
+    let dc_val = temp_block[0].wrapping_add(dc_round) >> dc_shift;
+    *used_avx256 = true;
 
-        dc.encode_dc(dc_val.wrapping_sub(*dc_pred));
-        dc.emit_bits32();
-        *dc_pred = dc_val;
+    dc.encode_dc(dc_val.wrapping_sub(*dc_pred));
+    dc.emit_bits32();
+    *dc_pred = dc_val;
 
-        if m_index == 0 {
-            *num_zeros += 64;
-            return;
-        }
-
-        // AC symbols are converted lazily at their read points; only nonzero
-        // positions are ever encoded (matches the NEON path).
-        let mut m = m_index;
-        let nz = m.trailing_zeros() as usize;
-        *num_zeros += nz as u32;
-        ac.encode_zeros(num_zeros);
-        ac.emit_bits32();
-        ac.encode_value(golomb_symbol(temp_block[nz]));
-        let mut pos = nz + 1;
-        m >>= nz + 1;
-        ac.emit_bits32();
-        while m != 0 {
-            let zeros = m.trailing_zeros() as usize;
-            ac.encode_zeros_small(zeros as u64);
-            ac.encode_value(golomb_symbol(temp_block[pos + zeros]));
-            pos += zeros + 1;
-            m >>= zeros + 1;
-            ac.emit_bits32();
-        }
-        *num_zeros = (64 - pos) as u32;
+    if m_index == 0 {
+        *num_zeros += 64;
+        return;
     }
+
+    // AC symbols are converted lazily at their read points; only nonzero
+    // positions are ever encoded (matches the NEON path).
+    let mut m = m_index;
+    let nz = m.trailing_zeros() as usize;
+    *num_zeros += nz as u32;
+    ac.encode_zeros(num_zeros);
+    ac.emit_bits32();
+    ac.encode_value(golomb_symbol(temp_block[nz]));
+    let mut pos = nz + 1;
+    m >>= nz + 1;
+    ac.emit_bits32();
+    while m != 0 {
+        let zeros = m.trailing_zeros() as usize;
+        ac.encode_zeros_small(zeros as u64);
+        ac.encode_value(golomb_symbol(temp_block[pos + zeros]));
+        pos += zeros + 1;
+        m >>= zeros + 1;
+        ac.emit_bits32();
+    }
+    *num_zeros = (64 - pos) as u32;
 }
 
 #[cfg(target_arch = "x86_64")]
@@ -990,7 +1155,7 @@ mod tests {
 
     #[test]
     fn dual_fdct_avx2_matches_sse_x2() {
-        if !is_x86_feature_detected!("avx2") {
+        if !is_x86_feature_detected!("avx2") || !is_x86_feature_detected!("bmi2") {
             return;
         }
         use crate::simd::sse128::fdct_quant_zig_sse;
@@ -1029,7 +1194,7 @@ mod tests {
 
             let mut actual_left = [0i16; 64];
             let mut actual_right = [0i16; 64];
-            unsafe {
+            let (mask_left, mask_right) = unsafe {
                 super::fdct_quant_zig_avx2(
                     src.as_ptr(),
                     stride,
@@ -1037,8 +1202,8 @@ mod tests {
                     add_val,
                     &mut actual_left,
                     &mut actual_right,
-                );
-            }
+                )
+            };
 
             assert_eq!(
                 actual_left, expected_left,
@@ -1047,6 +1212,17 @@ mod tests {
             assert_eq!(
                 actual_right, expected_right,
                 "right block mismatch (add_val={add_val})"
+            );
+            // The fused mask must match a standalone scan of the same output.
+            assert_eq!(
+                mask_left,
+                unsafe { ac_nonzero_mask_avx2(&actual_left) },
+                "left mask mismatch (add_val={add_val})"
+            );
+            assert_eq!(
+                mask_right,
+                unsafe { ac_nonzero_mask_avx2(&actual_right) },
+                "right mask mismatch (add_val={add_val})"
             );
         }
     }
@@ -1111,5 +1287,62 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn zigzag_permute_mask_avx2_matches_scalar() {
+        if !is_x86_feature_detected!("avx2") || !is_x86_feature_detected!("bmi2") {
+            return;
+        }
+        use std::arch::x86_64::*;
+
+        // Two raster blocks: one dense with distinct values, one sparse.
+        let mut spatial_left = [0i16; 64];
+        let mut spatial_right = [0i16; 64];
+        for (i, c) in spatial_left.iter_mut().enumerate() {
+            *c = ((i as i16) * 37 % 251) - 125;
+        }
+        spatial_right[3] = 7;
+        spatial_right[63] = -9;
+
+        let mut rows = unsafe { [_mm256_setzero_si256(); 8] };
+        for (r, row) in rows.iter_mut().enumerate() {
+            // SAFETY: test verified AVX2+BMI2; arrays are 64 i16 each.
+            *row = unsafe {
+                let lo = _mm_loadu_si128(spatial_left.as_ptr().add(r * 8).cast::<__m128i>());
+                let hi = _mm_loadu_si128(spatial_right.as_ptr().add(r * 8).cast::<__m128i>());
+                _mm256_inserti128_si256(_mm256_castsi128_si256(lo), hi, 1)
+            };
+        }
+
+        let mut out_left = [0i16; 64];
+        let mut out_right = [0i16; 64];
+        // SAFETY: test verified AVX2+BMI2.
+        let (mask_left, mask_right) =
+            unsafe { super::zigzag_permute_mask_avx2(&rows, &mut out_left, &mut out_right) };
+
+        // Scalar oracle: the exact scatter the previous implementation ran.
+        let mut expect_left = [0i16; 64];
+        let mut expect_right = [0i16; 64];
+        for i in 0..64 {
+            let zi = crate::tables::ZIGZAG_INV[i] as usize;
+            expect_left[zi] = spatial_left[i];
+            expect_right[zi] = spatial_right[i];
+        }
+        assert_eq!(out_left, expect_left);
+        assert_eq!(out_right, expect_right);
+
+        let mut expect_mask_left = 0u64;
+        let mut expect_mask_right = 0u64;
+        for i in 1..64 {
+            if expect_left[i] != 0 {
+                expect_mask_left |= 1 << i;
+            }
+            if expect_right[i] != 0 {
+                expect_mask_right |= 1 << i;
+            }
+        }
+        assert_eq!(mask_left, expect_mask_left);
+        assert_eq!(mask_right, expect_mask_right);
     }
 }

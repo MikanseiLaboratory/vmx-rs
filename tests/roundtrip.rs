@@ -167,7 +167,7 @@ fn preview_bgra_from_dc_prefix() {
     assert!(out.iter().any(|&b| b != 0), "preview BGRA looks empty");
     // Opaque alpha on every pixel.
     assert!(
-        out.chunks_exact(4).all(|p| p[3] == 255),
+        out.as_chunks::<4>().0.iter().all(|p| p[3] == 255),
         "preview BGRA alpha must be 255"
     );
 

@@ -680,9 +680,7 @@ pub unsafe fn zig_invquant_idct_neon(
         for row in 0..8 {
             let m = vreinterpretq_s16_u16(vld1q_u16(decode_matrix.as_ptr().add(row * 8)));
             let q = vshrq_n_s16(vmulq_s16(spatial[row], m), 4);
-            let mut row_arr = [0i16; 8];
-            vst1q_s16(row_arr.as_mut_ptr(), q);
-            rows[row] = idct_row_neon_vec(row_arr, IDCT_ROW_TABLES[row]);
+            rows[row] = idct_row_neon_vec(q, IDCT_ROW_TABLES[row]);
         }
 
         let out_rows = idct_columns_8_neon(rows, add_val);
@@ -701,7 +699,7 @@ pub unsafe fn zig_invquant_idct_neon(
 #[target_feature(enable = "neon")]
 unsafe fn idct_row_neon(x: [i16; 8], tab: &[i16; 32]) -> [i16; 8] {
     unsafe {
-        let v = idct_row_neon_vec(x, tab);
+        let v = idct_row_neon_vec(vld1q_s16(x.as_ptr()), tab);
         let mut out = [0i16; 8];
         vst1q_s16(out.as_mut_ptr(), v);
         out
@@ -710,12 +708,19 @@ unsafe fn idct_row_neon(x: [i16; 8], tab: &[i16; 32]) -> [i16; 8] {
 
 #[cfg(target_arch = "aarch64")]
 #[target_feature(enable = "neon")]
-unsafe fn idct_row_neon_vec(x: [i16; 8], tab: &[i16; 32]) -> int16x8_t {
+unsafe fn idct_row_neon_vec(v: int16x8_t, tab: &[i16; 32]) -> int16x8_t {
     unsafe {
-        let a02 = vld1q_s16([x[0], x[2], x[0], x[2], x[0], x[2], x[0], x[2]].as_ptr());
-        let a46 = vld1q_s16([x[4], x[6], x[4], x[6], x[4], x[6], x[4], x[6]].as_ptr());
-        let a13 = vld1q_s16([x[1], x[3], x[1], x[3], x[1], x[3], x[1], x[3]].as_ptr());
-        let a57 = vld1q_s16([x[5], x[7], x[5], x[7], x[5], x[7], x[5], x[7]].as_ptr());
+        // Build the (x0,x2)/(x4,x6) and (x1,x3)/(x5,x7) broadcast pairs
+        // directly in registers: vuzp1/vuzp2 extract the even/odd coefficient
+        // pairs, then vdupq_laneq_s32 broadcasts each 32-bit pair (two packed
+        // i16 lanes) to all four madd lanes. This replaces the four stack-array
+        // loads (and the store/load round-trip that fed this kernel).
+        let even_pairs = vreinterpretq_s32_s16(vuzp1q_s16(v, v));
+        let odd_pairs = vreinterpretq_s32_s16(vuzp2q_s16(v, v));
+        let a02 = vreinterpretq_s16_s32(vdupq_laneq_s32(even_pairs, 0));
+        let a46 = vreinterpretq_s16_s32(vdupq_laneq_s32(even_pairs, 1));
+        let a13 = vreinterpretq_s16_s32(vdupq_laneq_s32(odd_pairs, 0));
+        let a57 = vreinterpretq_s16_s32(vdupq_laneq_s32(odd_pairs, 1));
 
         let even = vaddq_s32(
             vaddq_s32(

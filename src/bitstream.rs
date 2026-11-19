@@ -54,6 +54,13 @@ impl SliceData {
         if offset >= limit {
             return 0;
         }
+        // Fast path: a full 8-byte word inside the buffer. `reload_bits` hits
+        // this every ~32 consumed bits, so keep the common case copy-light.
+        // The tail path below still zero-fills past `limit`.
+        if offset + 8 <= limit && offset + 8 <= self.stream.len() {
+            let word: [u8; 8] = self.stream[offset..offset + 8].try_into().unwrap();
+            return u64::from_be_bytes(word);
+        }
         let end = (offset + 8).min(limit).min(self.stream.len());
         let mut buf = [0u8; 8];
         let available = end.saturating_sub(offset);
@@ -275,6 +282,15 @@ impl SliceData {
 #[inline]
 pub fn get_2mag_sign(input: i16) -> i16 {
     (input.wrapping_add(input)) ^ (input >> 15)
+}
+
+/// Encode-side Golomb symbol (2mag+1) for one quantized coefficient.
+///
+/// Callers evaluate this lazily at each nonzero coefficient instead of
+/// materializing a full 64-entry table per block.
+#[inline]
+pub fn golomb_symbol(coeff: i16) -> u32 {
+    (get_2mag_sign(coeff) as u32).wrapping_add(1)
 }
 
 #[inline]

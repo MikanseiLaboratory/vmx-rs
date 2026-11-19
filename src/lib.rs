@@ -25,6 +25,7 @@ pub use error::{Result, VmxError};
 pub use gpu::{GpuFrame, request_headless_device};
 pub use instance::{Codec, Config};
 pub use simd::{SimdCapabilities, SimdPath};
+pub use thread_pool::{clear_shared_thread_pool, use_shared_thread_pool};
 pub use types::{
     ALIGNMENT, BITS_SIZE, ColorSpace, DECODE_MATRIX_COUNT, ENCODE_MATRIX_COUNT, Format,
     ImageFormat, MAX_HEIGHT, MAX_PLANES, MAX_Q, MAX_WIDTH, MIN_HEIGHT, MIN_WIDTH, Profile,

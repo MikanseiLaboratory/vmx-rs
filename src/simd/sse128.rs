@@ -11,10 +11,14 @@
 #![allow(dead_code)]
 
 use crate::bitstream::SliceData;
-use crate::codec::plane::{PlaneView, decode_plane_scalar, encode_plane_scalar};
+use crate::codec::plane::PlaneView;
+#[cfg(target_arch = "x86_64")]
+use crate::codec::plane::encode_plane_scalar;
+#[cfg(not(target_arch = "x86_64"))]
+use crate::codec::plane::{decode_plane_scalar, encode_plane_scalar};
 
 #[cfg(target_arch = "x86_64")]
-use crate::bitstream::get_2mag_sign;
+use crate::bitstream::golomb_symbol;
 #[cfg(target_arch = "x86_64")]
 use crate::tables::{
     FDCT_ROUND1, FDCT_SQRT2, FDCT_TAN1, FDCT_TAN2, FDCT_TAN3, FTAB1_128, FTAB2_128, FTAB3_128,
@@ -214,7 +218,7 @@ unsafe fn ac_nonzero_mask_sse(coeffs: &[i16; 64]) -> u64 {
     }
 }
 
-/// Encode using SSE128 when available; falls back to scalar.
+/// Encode using the SSE128 path when it was selected at construction.
 pub fn encode_plane(
     plane: &PlaneView<'_>,
     dc: &mut SliceData,
@@ -225,15 +229,20 @@ pub fn encode_plane(
 ) {
     #[cfg(target_arch = "x86_64")]
     {
-        if is_x86_feature_detected!("sse4.2") {
-            // SAFETY: feature detected; plane bounds and encode matrix length are
-            // checked by the same block loop used by the scalar implementation.
-            return unsafe {
-                encode_plane_sse(plane, dc, ac, encode_matrix, dc_shift, temp_block);
-            };
+        // SAFETY: `SimdPath::Sse128` is only handed out by `Codec::new` after
+        // detecting SSE4.2+SSSE3 (see `SimdCapabilities::select_path`), and the
+        // path tests gate their injected calls the same way. Re-running CPUID
+        // per plane call only added an atomic load and a call boundary on the
+        // hot path. Plane bounds and encode matrix length are checked by the
+        // same block loop the scalar implementation uses.
+        unsafe {
+            encode_plane_sse(plane, dc, ac, encode_matrix, dc_shift, temp_block);
         }
     }
-    encode_plane_scalar(plane, dc, ac, encode_matrix, dc_shift, temp_block);
+    #[cfg(not(target_arch = "x86_64"))]
+    {
+        encode_plane_scalar(plane, dc, ac, encode_matrix, dc_shift, temp_block);
+    }
 }
 
 #[cfg(target_arch = "x86_64")]
@@ -246,7 +255,8 @@ unsafe fn encode_plane_sse(
     dc_shift: i32,
     temp_block: &mut [i16; 64],
 ) {
-    // SAFETY: `encode_plane` has dispatched only after detecting SSE4.2.
+    // SAFETY: `encode_plane` dispatches only on the pre-selected Sse128 path
+    // (SSE4.2+SSSE3 detected at `Codec::new`).
     unsafe {
         if encode_matrix.len() < 192 {
             return encode_plane_scalar(plane, dc, ac, encode_matrix, dc_shift, temp_block);
@@ -288,23 +298,21 @@ unsafe fn encode_plane_sse(
                     continue;
                 }
 
-                let mut coded = [0u32; 64];
-                for i in 0..64 {
-                    coded[i] = (get_2mag_sign(temp_block[i]) as u32).wrapping_add(1);
-                }
+                // AC symbols are converted lazily at their read points; only
+                // nonzero positions are ever encoded (matches the NEON path).
                 let mut m = m_index;
                 let nz = m.trailing_zeros() as usize;
                 num_zeros += nz as u32;
                 ac.encode_zeros(&mut num_zeros);
                 ac.emit_bits32();
-                ac.encode_value(coded[nz]);
+                ac.encode_value(golomb_symbol(temp_block[nz]));
                 let mut pos = nz + 1;
                 m >>= nz + 1;
                 ac.emit_bits32();
                 while m != 0 {
                     let zeros = m.trailing_zeros() as usize;
                     ac.encode_zeros_small(zeros as u64);
-                    ac.encode_value(coded[pos + zeros]);
+                    ac.encode_value(golomb_symbol(temp_block[pos + zeros]));
                     pos += zeros + 1;
                     m >>= zeros + 1;
                     ac.emit_bits32();
@@ -329,11 +337,16 @@ pub fn decode_plane(
 ) {
     #[cfg(target_arch = "x86_64")]
     {
-        if is_x86_feature_detected!("sse4.1") && is_x86_feature_detected!("ssse3") {
-            return decode_plane_sse(plane, dc, ac, decode_matrix, dc_shift, temp_block);
-        }
+        // SAFETY: `SimdPath::Sse128` implies SSE4.2+SSSE3 were detected at
+        // `Codec::new`, and every SSE4.2 CPU ships SSE4.1, so the SSSE3+SSE4.1
+        // decode kernel is available. The AVX2 decode fallback below already
+        // relied on the same implication; no per-call CPUID.
+        decode_plane_sse(plane, dc, ac, decode_matrix, dc_shift, temp_block);
     }
-    decode_plane_scalar(plane, dc, ac, decode_matrix, dc_shift, temp_block);
+    #[cfg(not(target_arch = "x86_64"))]
+    {
+        decode_plane_scalar(plane, dc, ac, decode_matrix, dc_shift, temp_block);
+    }
 }
 
 #[cfg(target_arch = "x86_64")]

@@ -1,5 +1,7 @@
 //! Codec instance — create, encode, decode, container I/O.
 
+use std::sync::Arc;
+
 use crate::bitrate::{adjust_bitrate, lookup_bitrate};
 use crate::codec::slice::{
     PlaneBuffers, SliceSet, decode_slices_fused_packed422, encode_slices, encode_slices_fused_bgra,
@@ -72,7 +74,7 @@ pub struct Codec {
     aligned_height: i32,
     target_bytes_min: i32,
     target_bytes_max: i32,
-    pool: ThreadPool,
+    pub(crate) pool: Arc<ThreadPool>,
     pub(crate) preview_size: Size,
     pub(crate) image_format: ImageFormat,
     #[cfg(feature = "wgpu")]
@@ -134,11 +136,18 @@ impl Codec {
         let color_path = ColorSimdPath::detect();
 
         let aligned_height = align_up(height, 16);
-        let plane_len = y_stride * aligned_height as usize * 2;
-        let y = vec![0u8; plane_len];
-        let u = vec![128u8; plane_len];
-        let v = vec![128u8; plane_len];
-        let a = vec![255u8; plane_len];
+        // Size each plane to exactly what the slice offsets address. The old
+        // allocation gave every plane the (doubled) Y-stride length, so U/V
+        // carried 4x their need (1920x1080: 16.7 MB allocated for 6.3 MB used;
+        // 8K: 265 MB for 100 MB) and initialization touched all of it. The
+        // 16-bit formats that would have needed the doubling are still
+        // unimplemented.
+        let y_len = y_stride * aligned_height as usize;
+        let uv_len = uv_stride * aligned_height as usize;
+        let y = vec![0u8; y_len];
+        let u = vec![128u8; uv_len];
+        let v = vec![128u8; uv_len];
+        let a = vec![255u8; y_len];
 
         let slice_count = (aligned_height >> 4) as usize;
         let dc_len = y_stride * SLICE_HEIGHT as usize * 2;
@@ -217,7 +226,11 @@ impl Codec {
             aligned_height,
             target_bytes_min: br.target_bytes_min,
             target_bytes_max: br.target_bytes_max,
-            pool: ThreadPool::new(threads),
+            // Prefer a process-wide pool when one is installed: many codecs
+            // then share one worker set instead of each oversubscribing the
+            // machine with their own.
+            pool: crate::thread_pool::shared_thread_pool()
+                .unwrap_or_else(|| Arc::new(ThreadPool::new(threads))),
             preview_size: Size::new(align_up(width >> 3, 2), height >> 3),
             image_format: ImageFormat::Uyvy,
             #[cfg(feature = "wgpu")]
@@ -277,12 +290,17 @@ impl Codec {
         self.capabilities
     }
 
+    /// Number of slice workers behind this instance (shared pool included).
     pub fn threads(&self) -> usize {
         self.pool.thread_count()
     }
 
+    /// Switch this instance to a private pool with `threads` workers.
+    ///
+    /// Instances built on [`crate::use_shared_thread_pool`] opt out here; a
+    /// `threads` smaller than the machine count is a per-instance cap.
     pub fn set_threads(&mut self, threads: usize) {
-        self.pool = ThreadPool::new(threads.max(1));
+        self.pool = Arc::new(ThreadPool::new(threads.max(1)));
     }
 
     pub fn quality(&self) -> i32 {
@@ -348,7 +366,7 @@ impl Codec {
             &self.encode_presets[idx],
             dc_shift,
             plane_count,
-            Some(&self.pool),
+            Some(self.pool.as_ref()),
         );
     }
 
@@ -409,7 +427,7 @@ impl Codec {
             &mut self.slices,
             &self.decode_presets[idx],
             dc_shift,
-            Some(&self.pool),
+            Some(self.pool.as_ref()),
             dst,
             stride,
             self.size.width,
@@ -497,7 +515,7 @@ impl Codec {
             &mut self.slices,
             &self.decode_presets[idx],
             dc_shift,
-            Some(&self.pool),
+            Some(self.pool.as_ref()),
             dst,
             stride,
             self.size.width,
@@ -520,7 +538,7 @@ impl Codec {
             &mut self.slices,
             &self.encode_presets[self.decode_matrix_idx],
             self.dc_shift,
-            Some(&self.pool),
+            Some(self.pool.as_ref()),
             src,
             stride,
             self.size.width,
@@ -537,7 +555,7 @@ impl Codec {
             &mut self.slices,
             &self.encode_presets[self.decode_matrix_idx],
             self.dc_shift,
-            Some(&self.pool),
+            Some(self.pool.as_ref()),
             src,
             stride,
             self.size.width,
@@ -832,5 +850,40 @@ mod tests {
         bgra.encode_bgra(&src, 64 * 4).unwrap();
         let bgra_bits = save_bits(&mut bgra);
         assert!(bgrx_bits.len() < bgra_bits.len());
+    }
+
+    #[test]
+    fn shared_thread_pool_is_picked_up_and_replaceable() {
+        use crate::{clear_shared_thread_pool, use_shared_thread_pool};
+
+        use_shared_thread_pool(Some(2));
+        let codec = Codec::new(Config::new(64, 64)).unwrap();
+        assert_eq!(codec.threads(), 2);
+
+        // A replacement pool is picked up by later codecs.
+        use_shared_thread_pool(Some(1));
+        let codec = Codec::new(Config::new(64, 64)).unwrap();
+        assert_eq!(codec.threads(), 1);
+
+        // set_threads still switches one instance to a private pool.
+        let mut codec = Codec::new(Config::new(64, 64)).unwrap();
+        codec.set_threads(3);
+        assert_eq!(codec.threads(), 3);
+
+        // A shared-pool codec produces a normal bitstream.
+        let stride = 64 * 2;
+        let mut frame = vec![0u8; stride * 64];
+        for (i, b) in frame.iter_mut().enumerate() {
+            *b = (i % 256) as u8;
+        }
+        codec.encode_uyvy(&frame, stride).unwrap();
+        let mut bits = vec![0u8; 1 << 20];
+        let len = codec.save_to(&mut bits).unwrap();
+        assert!(len > 3);
+
+        // Cleared: back to dedicated pools.
+        clear_shared_thread_pool();
+        let codec = Codec::new(Config::new(64, 64)).unwrap();
+        assert!(codec.threads() >= 1);
     }
 }

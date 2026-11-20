@@ -2,7 +2,7 @@
 
 CPU numbers below are from dedicated GCP Spot VMs in Tokyo (`asia-northeast1`) on 2026-11-20. They replace the earlier shared-VM and GitHub Actions tables as the primary result. Each table is one pass. A gap of a few percent is one sample, not a settled ordering.
 
-Fps columns, left to right, are libvmx (official), vmx-codec (Saul), and vmx. The x86-64 tables insert libvmx 128-bit after the AVX2 column. **Bold** is the fastest median on that row (a tie bolds each tied value). The profile cell is the OMT name, the sender's quality name, and the fixed q, as in `OMT_HQ — High (96)`. `✗` is a median below 60 fps.
+Fps columns, left to right, are libvmx (official), vmx-codec (Saul), and vmx. The x86-64 tables insert libvmx 128-bit after the AVX2 column. **Bold** is the fastest median on that row (a tie bolds each tied value). In the ratio tables, the same rule uses the geometric mean of fps over the rows in that line: the 最速 column names the winner (`libvmx`, `libvmx 128-bit`, `vmx-codec`, or `vmx`), and the winner's ratio cell is bold when that winner is vmx or vmx-codec. libvmx's ratio is 1 and is not printed. The profile cell is the OMT name, the sender's quality name, and the fixed q, as in `OMT_HQ — High (96)`. `✗` is a median below 60 fps.
 
 | Implementation | Commit / version | What was timed |
 |---|---|---|
@@ -79,41 +79,41 @@ Geometric mean of `median / libvmx` over the 12 rows of that operation and threa
 
 ### c4-standard-8 (4 cores, SMT)
 
-| Operation | Threads | vmx / libvmx | vmx-codec / libvmx |
-|---|---:|---:|---:|
-| Encode | 1 | 0.75 (0.68–0.82) | 0.38 (0.32–0.46) |
-| Encode | 8 | 1.09 (0.97–1.28) | 0.32 (0.25–0.42) |
-| Decode | 1 | 0.73 (0.55–1.00) | 0.52 (0.43–0.63) |
-| Decode | 8 | 1.03 (0.75–1.43) | 0.33 (0.18–0.60) |
+| Operation | Threads | vmx / libvmx | vmx-codec / libvmx | 最速 |
+|---|---:|---:|---:|---|
+| Encode | 1 | 0.75 (0.68–0.82) | 0.38 (0.32–0.46) | libvmx |
+| Encode | 8 | **1.09 (0.97–1.28)** | 0.32 (0.25–0.42) | vmx |
+| Decode | 1 | 0.73 (0.55–1.00) | 0.52 (0.43–0.63) | libvmx |
+| Decode | 8 | **1.03 (0.75–1.43)** | 0.33 (0.18–0.60) | vmx |
 
-vmx by image:
+vmx / libvmx by image. 最速 is still over every implementation, so a bold ratio means vmx is ahead of libvmx, vmx-codec, and, on x86-64, libvmx 128-bit.
 
-| Operation | Threads | natural | bars |
-|---|---:|---:|---:|
-| Encode | 1 | 0.75 (0.68–0.82) | 0.74 (0.74–0.75) |
-| Encode | 8 | 1.16 (1.02–1.28) | 1.03 (0.97–1.08) |
-| Decode | 1 | 0.91 (0.86–1.00) | 0.59 (0.55–0.62) |
-| Decode | 8 | 1.31 (1.19–1.43) | 0.81 (0.75–0.86) |
+| Operation | Threads | natural | bars | 最速 (natural) | 最速 (bars) |
+|---|---:|---:|---:|---|---|
+| Encode | 1 | 0.75 (0.68–0.82) | 0.74 (0.74–0.75) | libvmx | libvmx |
+| Encode | 8 | **1.16 (1.02–1.28)** | **1.03 (0.97–1.08)** | vmx | vmx |
+| Decode | 1 | 0.91 (0.86–1.00) | 0.59 (0.55–0.62) | libvmx | libvmx 128-bit |
+| Decode | 8 | **1.31 (1.19–1.43)** | 0.81 (0.75–0.86) | vmx | libvmx 128-bit |
 
 Eight threads here share four cores. The 8-thread encode mean of 1.09 is much closer to libvmx than the same ratio on the 8-core c4a below. vmx-codec's SSE2 path is also behind libvmx's 128-bit path on this machine (geometric mean 0.58, 0.48, 0.54, and 0.35 for encode 1 thread, encode 8, decode 1, and decode 8). Several 8-thread colour-bar decode rows are higher for the 128-bit path than for AVX2 libvmx or vmx; those cells are the bold ones.
 
 ### c4a-standard-8 (8 cores)
 
-| Operation | Threads | vmx / libvmx | vmx-codec / libvmx |
-|---|---:|---:|---:|
-| Encode | 1 | 0.94 (0.93–0.97) | 1.07 (1.05–1.09) |
-| Encode | 8 | 1.85 (1.76–1.94) | 1.66 (1.59–1.79) |
-| Decode | 1 | 0.74 (0.66–0.83) | 0.76 (0.60–0.97) |
-| Decode | 8 | 1.40 (1.16–1.64) | 0.80 (0.45–1.44) |
+| Operation | Threads | vmx / libvmx | vmx-codec / libvmx | 最速 |
+|---|---:|---:|---:|---|
+| Encode | 1 | 0.94 (0.93–0.97) | **1.07 (1.05–1.09)** | vmx-codec |
+| Encode | 8 | **1.85 (1.76–1.94)** | 1.66 (1.59–1.79) | vmx |
+| Decode | 1 | 0.74 (0.66–0.83) | 0.76 (0.60–0.97) | libvmx |
+| Decode | 8 | **1.40 (1.16–1.64)** | 0.80 (0.45–1.44) | vmx |
 
-vmx by image:
+vmx / libvmx by image:
 
-| Operation | Threads | natural | bars |
-|---|---:|---:|---:|
-| Encode | 1 | 0.95 (0.93–0.97) | 0.93 (0.93–0.93) |
-| Encode | 8 | 1.82 (1.76–1.90) | 1.87 (1.78–1.94) |
-| Decode | 1 | 0.80 (0.78–0.83) | 0.68 (0.66–0.71) |
-| Decode | 8 | 1.59 (1.53–1.64) | 1.23 (1.16–1.28) |
+| Operation | Threads | natural | bars | 最速 (natural) | 最速 (bars) |
+|---|---:|---:|---:|---|---|
+| Encode | 1 | 0.95 (0.93–0.97) | 0.93 (0.93–0.93) | vmx-codec | vmx-codec |
+| Encode | 8 | **1.82 (1.76–1.90)** | **1.87 (1.78–1.94)** | vmx | vmx |
+| Decode | 1 | 0.80 (0.78–0.83) | 0.68 (0.66–0.71) | libvmx | libvmx |
+| Decode | 8 | **1.59 (1.53–1.64)** | **1.23 (1.16–1.28)** | vmx | vmx |
 
 The 1-thread encode ratios sit in a band of a few percent. The within-run spread on this machine is usually well under that (median `(max − min) / median` about 0.3%). vmx-codec's 8-thread decode mean of 0.80 is pulled down by colour bars (0.45–0.48); on natural images that ratio is 1.39 (1.30–1.44).
 

@@ -40,19 +40,50 @@ def tables(rows, title):
                     cells.append(f"**{s}**" if round(vals[i])==best else s)
                 out.append(f"| {res} | {prof} — {QN[prof]} ({ref['q']}) | {img} | {int(ref['bytes_per_frame']):,} | "+" | ".join(cells)+" |")
             out.append("")
-    # ratio summary
-    out.append("### vmx / libvmx (geomean over rows, min–max)\n")
-    out.append("| Operation | Threads | vmx / libvmx | vmx-codec / libvmx |\n|---|---:|---:|---:|")
+    # ratio summary. Fastest is the highest geometric mean of fps
+    # (libvmx's ratio is 1). Bold the winner's printed ratio.
     import math
+    label={'libvmx':'libvmx','libvmx-128bit':'libvmx 128-bit','saul-vmx-codec':'vmx-codec','mikansei-vmx':'vmx'}
+    def ratios(op, th, impl, img=None):
+        rs=[]
+        for res,image,prof in keys:
+            if img and image!=img: continue
+            a=(res,prof,image,impl,op,th); b=(res,prof,image,'libvmx',op,th)
+            if a in d and b in d: rs.append(float(d[a]['fps_median'])/float(d[b]['fps_median']))
+        return rs
+    def cell(rs):
+        g=math.exp(sum(map(math.log,rs))/len(rs))
+        return g, f"{g:.2f} ({min(rs):.2f}–{max(rs):.2f})"
+    def fastest(op, th, img=None):
+        scores={}
+        for impl in present:
+            rs=ratios(op, th, impl, img)
+            if rs: scores[impl]=round(cell(rs)[0], 2)
+        best=max(scores.values())
+        return [label[i] for i,v in scores.items() if v==best]
+    out.append("### vmx / libvmx (geomean over rows, min–max)\n")
+    out.append("| Operation | Threads | vmx / libvmx | vmx-codec / libvmx | 最速 |\n|---|---:|---:|---:|---|")
     for op in ['encode','decode']:
         for th in ths:
-            res=[]
+            shown=[]
             for other in ['mikansei-vmx','saul-vmx-codec']:
-                rs=[float(d[(k[0],k[2],k[1],other,op,th)]['fps_median'])/float(d[(k[0],k[2],k[1],'libvmx',op,th)]['fps_median'])
-                    for k in keys if (k[0],k[2],k[1],other,op,th) in d and (k[0],k[2],k[1],'libvmx',op,th) in d]
-                g=math.exp(sum(map(math.log,rs))/len(rs)) if rs else float('nan')
-                res.append(f"{g:.2f} ({min(rs):.2f}–{max(rs):.2f})")
-            out.append(f"| {op.capitalize()} | {th} | {res[0]} | {res[1]} |")
+                text=cell(ratios(op, th, other))[1]
+                if label[other] in fastest(op, th): text=f"**{text}**"
+                shown.append(text)
+            out.append(f"| {op.capitalize()} | {th} | {shown[0]} | {shown[1]} | {', '.join(fastest(op, th))} |")
+    out.append("")
+    out.append("vmx / libvmx by image. 最速 is over every implementation present.\n")
+    out.append("| Operation | Threads | natural | bars | 最速 (natural) | 最速 (bars) |\n|---|---:|---:|---:|---|---|")
+    for op in ['encode','decode']:
+        for th in ths:
+            cells=[]
+            names=[]
+            for img in ['natural','bars']:
+                text=cell(ratios(op, th, 'mikansei-vmx', img))[1]
+                win=fastest(op, th, img)
+                if 'vmx' in win: text=f"**{text}**"
+                cells.append(text); names.append(', '.join(win))
+            out.append(f"| {op.capitalize()} | {th} | {cells[0]} | {cells[1]} | {names[0]} | {names[1]} |")
     out.append("")
     return "\n".join(out)
 if __name__=='__main__':

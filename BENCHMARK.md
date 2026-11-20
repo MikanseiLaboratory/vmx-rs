@@ -2,7 +2,7 @@
 
 CPU numbers below are from dedicated GCP Spot VMs in Tokyo (`asia-northeast1`) on 2026-11-20. They replace the earlier shared-VM and GitHub Actions tables as the primary result. Each table is one pass. A gap of a few percent is one sample, not a settled ordering.
 
-Fps columns, left to right, are libvmx (official), vmx-codec (Saul), and vmx. The x86-64 tables insert libvmx 128-bit after the AVX2 column. Every comparison table ends with a Fastest column naming the winner on that row (`libvmx`, `libvmx 128-bit`, `vmx-codec`, `vmx`, or, in the wgpu table, the path name). **Bold** is that winner's value; a tie bolds each tied value and lists every name. In the fps tables the winner is the highest median. In the ratio tables the winner is the highest geometric mean of fps over the rows in that line; libvmx's ratio is 1 and is not printed, and the winner's ratio cell is bold when the winner is vmx or vmx-codec. The profile cell is the OMT name, the sender's quality name, and the fixed q, as in `OMT_HQ — High (96)`. `✗` is a median below 60 fps.
+Fps columns, left to right, are libvmx (official), vmx-codec (Saul), and vmx. The x86-64 tables insert libvmx 128-bit after the AVX2 column. Every comparison table ends with a Fastest column naming the winner on that row (`libvmx`, `libvmx 128-bit`, `vmx-codec`, `vmx`, or, in the wgpu table, the path name). **Bold** is that winner's value; a tie bolds each tied value and lists every name. In the fps tables the winner is the highest median. In the ratio tables the winner is the highest geometric mean of fps over the rows in that line; libvmx's ratio is 1 and is not printed, and the winner's ratio cell is bold when the winner is vmx or vmx-codec. In the wgpu table, Fastest and bold ignore the host-pixel reference and name the faster of the GPU path and the CPU path that includes the texture transfer. The profile cell is the OMT name, the sender's quality name, and the fixed q, as in `OMT_HQ — High (96)`. `✗` is a median below 60 fps.
 
 | Implementation | Commit / version | What was timed |
 |---|---|---|
@@ -265,20 +265,20 @@ Google Axion, Neoverse-V2, 8 cores. 144 rows, all byte-identical to libvmx 128-b
 
 ## wgpu — NVIDIA L4
 
-`g2-standard-4` with an L4, same Tokyo day. This is `examples/gpu_bench.rs` on `vmx` 0.2.1 with `--features wgpu`, not the three-implementation harness and not the `bench/images` frames. The picture is that example's synthetic BGRA gradient. The profile is OMT_SQ, which is the sender's default. Each figure is the median of three runs; a run is the median of 60 iterations at 1080p and 30 at 2160p. CSV: [`bench/results/gcp-gpu-l4.csv`](bench/results/gcp-gpu-l4.csv).
+`g2-standard-4` with an L4, same Tokyo day. `bench/scripts/` does not launch this measurement, and the repository has no L4 stdout that names a file under `bench/images/`. The CSV case names match the labels printed by `examples/gpu_bench.rs`. That example does not open those UYVY files. `bench_resolution` fills a BGRA buffer in memory (`examples/gpu_bench.rs` lines 195–203): blue = `x % 256`, green = `y % 256`, red = 128, alpha = 255. It is neither `natural` nor `bars`. The CSV rows are 1080p and 2160p; that `main` runs 1920×1080 and, when those are the arguments, also 3840×2160. The profile is `Profile::OmtSq`. CSV: [`bench/results/gcp-gpu-l4.csv`](bench/results/gcp-gpu-l4.csv).
 
-The CPU columns are the same `vmx` build on this VM (4 vCPU, Cascade Lake, AVX2, all threads). **Bold** and Fastest follow the same rule as the other tables: the highest fps on the row. The host-pixel column does not move a texture, so it is often the fastest number and is not the same workload as the GPU path. The GPU / CPU+transfer column is that pair's ratio, not another implementation. The opaque encode has no CPU-plus-transfer measurement.
+The CPU columns are the same `vmx` build on this VM (4 vCPU, Cascade Lake, AVX2, all threads). Fastest and bold compare only the GPU path with the CPU path that includes the texture transfer. The host-pixel column stays as a reference and is not part of that choice. The opaque encode has no CPU-plus-transfer figure, so those rows have no Fastest name.
 
-| Resolution | Operation | CPU, host pixels | CPU + texture transfer | GPU (wgpu) | GPU / CPU+transfer | Fastest |
-| --- | --- | ---: | ---: | ---: | ---: | --- |
-| 1080p | Decode → BGRA texture | **516 fps (1.94 ms)** | 281 fps (3.55 ms) | 478 fps (2.09 ms) | 1.70× | CPU, host pixels |
-| 1080p | Preview (1/8) → texture | **1377 fps (0.73 ms)** | 1328 fps (0.75 ms) | 1190 fps (0.84 ms) | 0.90× | CPU, host pixels |
-| 1080p | Encode, BGRA texture → bitstream (alpha, 4 planes) | **278 fps (3.60 ms)** | 176 fps (5.69 ms) | 183 fps (5.45 ms) | 1.04× | CPU, host pixels |
-| 1080p | Encode, BGRA texture → bitstream (opaque, 3 planes) | **352 fps (2.84 ms)** | — | 262 fps (3.82 ms) | 0.74× vs host pixels | CPU, host pixels |
-| 2160p | Decode → BGRA texture | **131 fps (7.64 ms)** | 71 fps (14.08 ms) | 118 fps (8.45 ms) | 1.67× | CPU, host pixels |
-| 2160p | Preview (1/8) → texture | **453 fps (2.21 ms)** | 429 fps (2.33 ms) | 419 fps (2.38 ms) | 0.98× | CPU, host pixels |
-| 2160p | Encode, BGRA texture → bitstream (alpha, 4 planes) | **70 fps (14.28 ms)** | 37 fps ✗ (26.70 ms) | 42 fps ✗ (23.99 ms) | 1.11× | CPU, host pixels |
-| 2160p | Encode, BGRA texture → bitstream (opaque, 3 planes) | **89 fps (11.28 ms)** | — | 60 fps (16.64 ms) | 0.68× vs host pixels | CPU, host pixels |
+| Resolution | Image | Operation | CPU, host pixels | CPU + texture transfer | GPU (wgpu) | GPU / CPU+transfer | Fastest |
+| --- | --- | --- | ---: | ---: | ---: | ---: | --- |
+| 1080p | synthetic BGRA, not bench/images | Decode → BGRA texture | 516 fps (1.94 ms) | 281 fps (3.55 ms) | **478 fps (2.09 ms)** | 1.70× | GPU (wgpu) |
+| 1080p | synthetic BGRA, not bench/images | Preview (1/8) → texture | 1377 fps (0.73 ms) | **1328 fps (0.75 ms)** | 1190 fps (0.84 ms) | 0.90× | CPU + texture transfer |
+| 1080p | synthetic BGRA, not bench/images | Encode, BGRA texture → bitstream (alpha, 4 planes) | 278 fps (3.60 ms) | 176 fps (5.69 ms) | **183 fps (5.45 ms)** | 1.04× | GPU (wgpu) |
+| 1080p | synthetic BGRA, not bench/images | Encode, BGRA texture → bitstream (opaque, 3 planes) | 352 fps (2.84 ms) | — | 262 fps (3.82 ms) | 0.74× vs host pixels | — |
+| 2160p | synthetic BGRA, not bench/images | Decode → BGRA texture | 131 fps (7.64 ms) | 71 fps (14.08 ms) | **118 fps (8.45 ms)** | 1.67× | GPU (wgpu) |
+| 2160p | synthetic BGRA, not bench/images | Preview (1/8) → texture | 453 fps (2.21 ms) | **429 fps (2.33 ms)** | 419 fps (2.38 ms) | 0.98× | CPU + texture transfer |
+| 2160p | synthetic BGRA, not bench/images | Encode, BGRA texture → bitstream (alpha, 4 planes) | 70 fps (14.28 ms) | 37 fps ✗ (26.70 ms) | **42 fps ✗ (23.99 ms)** | 1.11× | GPU (wgpu) |
+| 2160p | synthetic BGRA, not bench/images | Encode, BGRA texture → bitstream (opaque, 3 planes) | 89 fps (11.28 ms) | — | 60 fps (16.64 ms) | 0.68× vs host pixels | — |
 
 GPU decode versus CPU decode differs by at most 3 LSB. PSNR is 54.6 dB at 1080p and 64.1 dB at 2160p (54.55 and 64.11 in the log). GPU preview and GPU encode match the CPU path bit for bit (PSNR 100 dB). Encode does colour conversion, FDCT, and quantisation on the GPU; Golomb coding stays on the CPU. Preview is the CPU `decode_preview_bgra` plus `queue.write_texture`.
 

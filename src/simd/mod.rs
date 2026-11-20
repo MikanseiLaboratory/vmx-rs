@@ -1,6 +1,7 @@
 pub mod avx2;
 pub mod dispatch;
 pub mod neon;
+pub mod neon_compat;
 pub mod plane_dispatch;
 pub mod safety;
 pub mod scalar;

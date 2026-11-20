@@ -21,6 +21,8 @@ path = "src/lib.rs"
 
 [features]
 default = []
+# AArch32 (armv7) NEON kernels. Requires nightly: rust-lang/rust#111800
+arm32-neon = []
 wgpu = ["dep:wgpu", "dep:bytemuck", "dep:pollster"]
 
 [dependencies]

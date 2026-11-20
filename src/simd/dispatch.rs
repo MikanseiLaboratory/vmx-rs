@@ -59,7 +59,30 @@ impl SimdCapabilities {
                 neon,
             }
         }
-        #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
+        #[cfg(all(target_arch = "arm", arm32_neon))]
+        {
+            // ARMv7 NEON is optional (VFP-only cores exist), so detect it at runtime.
+            Self {
+                ssse3: false,
+                sse42: false,
+                avx2: false,
+                bmi2: false,
+                neon: std::arch::is_arm_feature_detected!("neon"),
+            }
+        }
+        #[cfg(all(target_arch = "arm", not(arm32_neon)))]
+        {
+            // AArch32 NEON intrinsics are still unstable in Rust (rust-lang/rust#111800),
+            // so the NEON kernels are only compiled when the `arm32-neon` feature is enabled.
+            Self {
+                ssse3: false,
+                sse42: false,
+                avx2: false,
+                bmi2: false,
+                neon: false,
+            }
+        }
+        #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64", target_arch = "arm")))]
         {
             Self::default()
         }
@@ -101,7 +124,7 @@ impl SimdCapabilities {
             }
             SimdPath::Scalar
         }
-        #[cfg(target_arch = "aarch64")]
+        #[cfg(any(target_arch = "aarch64", target_arch = "arm"))]
         {
             let _ = uv_width;
             if caps.neon {
@@ -109,7 +132,7 @@ impl SimdCapabilities {
             }
             SimdPath::Scalar
         }
-        #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
+        #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64", target_arch = "arm")))]
         {
             let _ = (caps, uv_width);
             SimdPath::Scalar
@@ -222,7 +245,7 @@ mod tests {
         assert_eq!(SimdPath::Neon.to_string(), "neon");
     }
 
-    #[cfg(target_arch = "aarch64")]
+    #[cfg(any(target_arch = "aarch64", target_arch = "arm"))]
     #[test]
     fn aarch64_selects_neon_when_capable() {
         let caps = SimdCapabilities {

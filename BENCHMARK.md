@@ -2,6 +2,8 @@
 
 Measurements of three VMX1 implementations on the same 8-bit UYVY frames. The tables are medians from one run. They are not a ranking, and a gap inside the run-to-run band described below is not a stable difference.
 
+Fps columns, left to right, are libvmx (official), vmx-codec (Saul), and vmx — the x86-64 detail tables insert libvmx 128-bit after the AVX2 column — and **bold** is the fastest median on that row (a tie bolds each tied value).
+
 | Implementation | Commit / version | What was timed |
 |---|---|---|
 | [libvmx](https://github.com/openmediatransport/libvmx) | `31724bb96530325a989bc157c8e07538d6f1c4db` | Official C++ codec |
@@ -42,7 +44,7 @@ A second pass over a subset of the natural-image rows, with `RUSTFLAGS="-C targe
 
 On every one of the 384 rows the encoded bytes matched the libvmx 128-bit packet, and the decoded pixels matched.
 
-In the tables, `✗` means the median is below 60 fps. The `±` figure is half of `(max − min) / median` for the seven runs, rounded to the nearest percent. It is the spread inside that sample, not the 10–20% movement between separate runs. `KB/frame` in the short tables is `bytes / 1000`, rounded. `highest` is whichever of the four medians on that row was largest.
+In the tables, `✗` means the median is below 60 fps. The `±` figure is half of `(max − min) / median` for the seven runs, rounded to the nearest percent. It is the spread inside that sample, not the 10–20% movement between separate runs. `bytes/frame` is the exact encoded size.
 
 10-bit P216 and PA16 are not in the matrix. `vmx` 0.2.1 returns `invalid parameters` from `encode_p216`, `decode_p216`, `encode_pa16`, and `decode_pa16`. libvmx and vmx-codec both implement those formats; this file does not compare them.
 
@@ -81,248 +83,247 @@ Split by image, vmx only:
 
 vmx-codec's SSE2 code is also slower than libvmx's own 128-bit path, so the gap above is not only the wider AVX2 code. Geometric mean of `vmx-codec / libvmx 128-bit` over the same 24 rows: encode 1 thread 0.59, encode 8 threads 0.42, decode 1 thread 0.64, decode 8 threads 0.34. The low end of decode at 8 threads is the flat colour bars (0.16–0.26 against the 128-bit path).
 
-Read the ratios next to the noise. A geometric mean of 1.44 on 8-thread encode is outside a 10–20% band. A single row at 1.13, or the 8-thread bars decode mean of 1.04, is not. Several 8-thread bars decode rows are higher for libvmx's 128-bit path than for either AVX2 libvmx or vmx; the `highest` column records that.
+Read the ratios next to the noise. A geometric mean of 1.44 on 8-thread encode is outside a 10–20% band. A single row at 1.13, or the 8-thread bars decode mean of 1.04, is not. Several 8-thread bars decode rows are higher for libvmx's 128-bit path than for either AVX2 libvmx or vmx; those cells are the bold ones in the detail tables.
 
 The single-thread rows where vmx is behind libvmx, and the flat-bar decode rows, are the ones discussed as follow-up work in [issue 39](https://github.com/MikanseiLaboratory/vmx-rs/issues/39). This document does not change the codec.
 
 ## x86-64 tables
 
-Short tables: libvmx AVX2 / vmx-codec / vmx. Full tables, including libvmx's 128-bit path, follow.
-
-### None
-
-| Resolution | Profile | Image | q | KB/frame | libvmx | vmx-codec | vmx |
-|---|---|---|---:|---:|---:|---:|---:|
+These four tables are libvmx's AVX2 path, vmx-codec, and vmx. The next section adds libvmx's 128-bit path and the spread inside the seven runs.
 
 ### Encode, 1 thread
 
-| Resolution | Profile | Image | q | KB/frame | libvmx | vmx-codec | vmx |
+| Resolution | Profile | Image | q | bytes/frame | libvmx | vmx-codec | vmx |
 |---|---|---|---:|---:|---:|---:|---:|
-| 1080p | LQ | natural | 92 | 169 | 379 | 178 | 322 |
-| 1080p | SQ | natural | 94 | 292 | 328 | 153 | 279 |
-| 1080p | HQ | natural | 96 | 559 | 263 | 122 | 179 |
-| 1080p | OMT_LQ | natural | 92 | 169 | 386 | 180 | 339 |
-| 1080p | OMT_SQ | natural | 95 | 419 | 318 | 141 | 225 |
-| 1080p | OMT_HQ | natural | 96 | 559 | 268 | 131 | 200 |
-| 1080p | LQ | bars | 98 | 22 | 609 | 221 | 514 |
-| 1080p | SQ | bars | 98 | 22 | 607 | 224 | 511 |
-| 1080p | HQ | bars | 98 | 24 | 649 | 219 | 506 |
-| 1080p | OMT_LQ | bars | 98 | 22 | 641 | 221 | 517 |
-| 1080p | OMT_SQ | bars | 98 | 24 | 634 | 224 | 506 |
-| 1080p | OMT_HQ | bars | 98 | 24 | 597 | 221 | 510 |
-| 2160p | LQ | natural | 92 | 596 | 102 | 43 ✗ | 78 |
-| 2160p | SQ | natural | 94 | 1088 | 82 | 38 ✗ | 68 |
-| 2160p | HQ | natural | 96 | 2146 | 64 | 32 ✗ | 48 ✗ |
-| 2160p | OMT_LQ | natural | 92 | 596 | 102 | 41 ✗ | 86 |
-| 2160p | OMT_SQ | natural | 92 | 596 | 104 | 45 ✗ | 86 |
-| 2160p | OMT_HQ | natural | 94 | 1192 | 98 | 42 ✗ | 64 |
-| 2160p | LQ | bars | 98 | 76 | 160 | 52 ✗ | 117 |
-| 2160p | SQ | bars | 98 | 76 | 154 | 52 ✗ | 118 |
-| 2160p | HQ | bars | 98 | 81 | 153 | 46 ✗ | 120 |
-| 2160p | OMT_LQ | bars | 98 | 76 | 154 | 53 ✗ | 118 |
-| 2160p | OMT_SQ | bars | 98 | 76 | 157 | 48 ✗ | 115 |
-| 2160p | OMT_HQ | bars | 98 | 81 | 148 | 50 ✗ | 116 |
+| 1080p | LQ | natural | 92 | 168,577 | **379** | 178 | 322 |
+| 1080p | SQ | natural | 94 | 292,310 | **328** | 153 | 279 |
+| 1080p | HQ | natural | 96 | 559,463 | **263** | 122 | 179 |
+| 1080p | OMT_LQ | natural | 92 | 168,577 | **386** | 180 | 339 |
+| 1080p | OMT_SQ | natural | 95 | 418,883 | **318** | 141 | 225 |
+| 1080p | OMT_HQ | natural | 96 | 559,463 | **268** | 131 | 200 |
+| 1080p | LQ | bars | 98 | 22,008 | **609** | 221 | 514 |
+| 1080p | SQ | bars | 98 | 22,008 | **607** | 224 | 511 |
+| 1080p | HQ | bars | 98 | 24,303 | **649** | 219 | 506 |
+| 1080p | OMT_LQ | bars | 98 | 22,008 | **641** | 221 | 517 |
+| 1080p | OMT_SQ | bars | 98 | 24,303 | **634** | 224 | 506 |
+| 1080p | OMT_HQ | bars | 98 | 24,303 | **597** | 221 | 510 |
+| 2160p | LQ | natural | 92 | 595,921 | **102** | 43 ✗ | 78 |
+| 2160p | SQ | natural | 94 | 1,088,322 | **82** | 38 ✗ | 68 |
+| 2160p | HQ | natural | 96 | 2,145,917 | **64** | 32 ✗ | 48 ✗ |
+| 2160p | OMT_LQ | natural | 92 | 595,921 | **102** | 41 ✗ | 86 |
+| 2160p | OMT_SQ | natural | 92 | 595,921 | **104** | 45 ✗ | 86 |
+| 2160p | OMT_HQ | natural | 94 | 1,192,159 | **98** | 42 ✗ | 64 |
+| 2160p | LQ | bars | 98 | 76,145 | **160** | 52 ✗ | 117 |
+| 2160p | SQ | bars | 98 | 76,145 | **154** | 52 ✗ | 118 |
+| 2160p | HQ | bars | 98 | 80,733 | **153** | 46 ✗ | 120 |
+| 2160p | OMT_LQ | bars | 98 | 76,145 | **154** | 53 ✗ | 118 |
+| 2160p | OMT_SQ | bars | 98 | 76,145 | **157** | 48 ✗ | 115 |
+| 2160p | OMT_HQ | bars | 98 | 80,733 | **148** | 50 ✗ | 116 |
 
 ### Encode, 8 threads
 
-| Resolution | Profile | Image | q | KB/frame | libvmx | vmx-codec | vmx |
+| Resolution | Profile | Image | q | bytes/frame | libvmx | vmx-codec | vmx |
 |---|---|---|---:|---:|---:|---:|---:|
-| 1080p | LQ | natural | 92 | 169 | 1331 | 398 | 2011 |
-| 1080p | SQ | natural | 94 | 292 | 1070 | 424 | 1470 |
-| 1080p | HQ | natural | 96 | 559 | 796 | 348 | 1181 |
-| 1080p | OMT_LQ | natural | 92 | 169 | 1296 | 426 | 2110 |
-| 1080p | OMT_SQ | natural | 95 | 419 | 988 | 342 | 1117 |
-| 1080p | OMT_HQ | natural | 96 | 559 | 821 | 393 | 1221 |
-| 1080p | LQ | bars | 98 | 22 | 2086 | 482 | 2843 |
-| 1080p | SQ | bars | 98 | 22 | 2122 | 481 | 3249 |
-| 1080p | HQ | bars | 98 | 24 | 2062 | 462 | 3195 |
-| 1080p | OMT_LQ | bars | 98 | 22 | 2167 | 492 | 3139 |
-| 1080p | OMT_SQ | bars | 98 | 24 | 2098 | 449 | 2843 |
-| 1080p | OMT_HQ | bars | 98 | 24 | 2066 | 482 | 2496 |
-| 2160p | LQ | natural | 92 | 596 | 366 | 132 | 544 |
-| 2160p | SQ | natural | 94 | 1088 | 300 | 125 | 451 |
-| 2160p | HQ | natural | 96 | 2146 | 256 | 101 | 330 |
-| 2160p | OMT_LQ | natural | 92 | 596 | 368 | 125 | 572 |
-| 2160p | OMT_SQ | natural | 92 | 596 | 358 | 133 | 544 |
-| 2160p | OMT_HQ | natural | 94 | 1192 | 348 | 117 | 456 |
-| 2160p | LQ | bars | 98 | 76 | 571 | 122 | 734 |
-| 2160p | SQ | bars | 98 | 76 | 540 | 115 | 839 |
-| 2160p | HQ | bars | 98 | 81 | 540 | 128 | 836 |
-| 2160p | OMT_LQ | bars | 98 | 76 | 515 | 119 | 814 |
-| 2160p | OMT_SQ | bars | 98 | 76 | 524 | 123 | 796 |
-| 2160p | OMT_HQ | bars | 98 | 81 | 530 | 135 | 811 |
+| 1080p | LQ | natural | 92 | 168,577 | 1331 | 398 | **2011** |
+| 1080p | SQ | natural | 94 | 292,310 | 1070 | 424 | **1470** |
+| 1080p | HQ | natural | 96 | 559,463 | 796 | 348 | **1181** |
+| 1080p | OMT_LQ | natural | 92 | 168,577 | 1296 | 426 | **2110** |
+| 1080p | OMT_SQ | natural | 95 | 418,883 | 988 | 342 | **1117** |
+| 1080p | OMT_HQ | natural | 96 | 559,463 | 821 | 393 | **1221** |
+| 1080p | LQ | bars | 98 | 22,008 | 2086 | 482 | **2843** |
+| 1080p | SQ | bars | 98 | 22,008 | 2122 | 481 | **3249** |
+| 1080p | HQ | bars | 98 | 24,303 | 2062 | 462 | **3195** |
+| 1080p | OMT_LQ | bars | 98 | 22,008 | 2167 | 492 | **3139** |
+| 1080p | OMT_SQ | bars | 98 | 24,303 | 2098 | 449 | **2843** |
+| 1080p | OMT_HQ | bars | 98 | 24,303 | 2066 | 482 | **2496** |
+| 2160p | LQ | natural | 92 | 595,921 | 366 | 132 | **544** |
+| 2160p | SQ | natural | 94 | 1,088,322 | 300 | 125 | **451** |
+| 2160p | HQ | natural | 96 | 2,145,917 | 256 | 101 | **330** |
+| 2160p | OMT_LQ | natural | 92 | 595,921 | 368 | 125 | **572** |
+| 2160p | OMT_SQ | natural | 92 | 595,921 | 358 | 133 | **544** |
+| 2160p | OMT_HQ | natural | 94 | 1,192,159 | 348 | 117 | **456** |
+| 2160p | LQ | bars | 98 | 76,145 | 571 | 122 | **734** |
+| 2160p | SQ | bars | 98 | 76,145 | 540 | 115 | **839** |
+| 2160p | HQ | bars | 98 | 80,733 | 540 | 128 | **836** |
+| 2160p | OMT_LQ | bars | 98 | 76,145 | 515 | 119 | **814** |
+| 2160p | OMT_SQ | bars | 98 | 76,145 | 524 | 123 | **796** |
+| 2160p | OMT_HQ | bars | 98 | 80,733 | 530 | 135 | **811** |
 
 ### Decode, 1 thread
 
-| Resolution | Profile | Image | q | KB/frame | libvmx | vmx-codec | vmx |
+| Resolution | Profile | Image | q | bytes/frame | libvmx | vmx-codec | vmx |
 |---|---|---|---:|---:|---:|---:|---:|
-| 1080p | LQ | natural | 92 | 169 | 407 | 269 | 372 |
-| 1080p | SQ | natural | 94 | 292 | 285 | 193 | 292 |
-| 1080p | HQ | natural | 96 | 559 | 195 | 106 | 188 |
-| 1080p | OMT_LQ | natural | 92 | 169 | 410 | 277 | 377 |
-| 1080p | OMT_SQ | natural | 95 | 419 | 242 | 151 | 231 |
-| 1080p | OMT_HQ | natural | 96 | 559 | 186 | 114 | 200 |
-| 1080p | LQ | bars | 98 | 22 | 1202 | 757 | 914 |
-| 1080p | SQ | bars | 98 | 22 | 1276 | 788 | 958 |
-| 1080p | HQ | bars | 98 | 24 | 1245 | 775 | 957 |
-| 1080p | OMT_LQ | bars | 98 | 22 | 1265 | 777 | 984 |
-| 1080p | OMT_SQ | bars | 98 | 24 | 1244 | 751 | 956 |
-| 1080p | OMT_HQ | bars | 98 | 24 | 1202 | 784 | 988 |
-| 2160p | LQ | natural | 92 | 596 | 117 | 75 | 92 |
-| 2160p | SQ | natural | 94 | 1088 | 74 | 50 ✗ | 62 |
-| 2160p | HQ | natural | 96 | 2146 | 44 ✗ | 27 ✗ | 46 ✗ |
-| 2160p | OMT_LQ | natural | 92 | 596 | 110 | 75 | 103 |
-| 2160p | OMT_SQ | natural | 92 | 596 | 119 | 75 | 101 |
-| 2160p | OMT_HQ | natural | 94 | 1192 | 84 | 52 ✗ | 62 |
-| 2160p | LQ | bars | 98 | 76 | 368 | 181 | 263 |
-| 2160p | SQ | bars | 98 | 76 | 355 | 189 | 248 |
-| 2160p | HQ | bars | 98 | 81 | 349 | 170 | 250 |
-| 2160p | OMT_LQ | bars | 98 | 76 | 366 | 186 | 244 |
-| 2160p | OMT_SQ | bars | 98 | 76 | 346 | 179 | 234 |
-| 2160p | OMT_HQ | bars | 98 | 81 | 346 | 189 | 246 |
+| 1080p | LQ | natural | 92 | 168,577 | **407** | 269 | 372 |
+| 1080p | SQ | natural | 94 | 292,310 | 285 | 193 | **292** |
+| 1080p | HQ | natural | 96 | 559,463 | **195** | 106 | 188 |
+| 1080p | OMT_LQ | natural | 92 | 168,577 | **410** | 277 | 377 |
+| 1080p | OMT_SQ | natural | 95 | 418,883 | **242** | 151 | 231 |
+| 1080p | OMT_HQ | natural | 96 | 559,463 | 186 | 114 | **200** |
+| 1080p | LQ | bars | 98 | 22,008 | **1202** | 757 | 914 |
+| 1080p | SQ | bars | 98 | 22,008 | **1276** | 788 | 958 |
+| 1080p | HQ | bars | 98 | 24,303 | **1245** | 775 | 957 |
+| 1080p | OMT_LQ | bars | 98 | 22,008 | **1265** | 777 | 984 |
+| 1080p | OMT_SQ | bars | 98 | 24,303 | **1244** | 751 | 956 |
+| 1080p | OMT_HQ | bars | 98 | 24,303 | **1202** | 784 | 988 |
+| 2160p | LQ | natural | 92 | 595,921 | **117** | 75 | 92 |
+| 2160p | SQ | natural | 94 | 1,088,322 | **74** | 50 ✗ | 62 |
+| 2160p | HQ | natural | 96 | 2,145,917 | 44 ✗ | 27 ✗ | **46** ✗ |
+| 2160p | OMT_LQ | natural | 92 | 595,921 | **110** | 75 | 103 |
+| 2160p | OMT_SQ | natural | 92 | 595,921 | **119** | 75 | 101 |
+| 2160p | OMT_HQ | natural | 94 | 1,192,159 | **84** | 52 ✗ | 62 |
+| 2160p | LQ | bars | 98 | 76,145 | **368** | 181 | 263 |
+| 2160p | SQ | bars | 98 | 76,145 | **355** | 189 | 248 |
+| 2160p | HQ | bars | 98 | 80,733 | **349** | 170 | 250 |
+| 2160p | OMT_LQ | bars | 98 | 76,145 | **366** | 186 | 244 |
+| 2160p | OMT_SQ | bars | 98 | 76,145 | **346** | 179 | 234 |
+| 2160p | OMT_HQ | bars | 98 | 80,733 | **346** | 189 | 246 |
 
 ### Decode, 8 threads
 
-| Resolution | Profile | Image | q | KB/frame | libvmx | vmx-codec | vmx |
+| Resolution | Profile | Image | q | bytes/frame | libvmx | vmx-codec | vmx |
 |---|---|---|---:|---:|---:|---:|---:|
-| 1080p | LQ | natural | 92 | 169 | 1328 | 579 | 2048 |
-| 1080p | SQ | natural | 94 | 292 | 947 | 538 | 1327 |
-| 1080p | HQ | natural | 96 | 559 | 618 | 388 | 1130 |
-| 1080p | OMT_LQ | natural | 92 | 169 | 1335 | 635 | 2169 |
-| 1080p | OMT_SQ | natural | 95 | 419 | 777 | 462 | 1071 |
-| 1080p | OMT_HQ | natural | 96 | 559 | 614 | 424 | 1231 |
-| 1080p | LQ | bars | 98 | 22 | 4220 | 780 | 3692 |
-| 1080p | SQ | bars | 98 | 22 | 4521 | 780 | 4058 |
-| 1080p | HQ | bars | 98 | 24 | 4624 | 792 | 4497 |
-| 1080p | OMT_LQ | bars | 98 | 22 | 4405 | 780 | 4291 |
-| 1080p | OMT_SQ | bars | 98 | 24 | 4411 | 734 | 4380 |
-| 1080p | OMT_HQ | bars | 98 | 24 | 4301 | 781 | 4397 |
-| 2160p | LQ | natural | 92 | 596 | 430 | 193 | 636 |
-| 2160p | SQ | natural | 94 | 1088 | 283 | 173 | 477 |
-| 2160p | HQ | natural | 96 | 2146 | 185 | 129 | 209 |
-| 2160p | OMT_LQ | natural | 92 | 596 | 334 | 174 | 685 |
-| 2160p | OMT_SQ | natural | 92 | 596 | 423 | 202 | 645 |
-| 2160p | OMT_HQ | natural | 94 | 1192 | 296 | 163 | 467 |
-| 2160p | LQ | bars | 98 | 76 | 1072 | 226 | 1068 |
-| 2160p | SQ | bars | 98 | 76 | 1223 | 242 | 1206 |
-| 2160p | HQ | bars | 98 | 81 | 1290 | 250 | 1583 |
-| 2160p | OMT_LQ | bars | 98 | 76 | 1261 | 242 | 1537 |
-| 2160p | OMT_SQ | bars | 98 | 76 | 1234 | 241 | 1523 |
-| 2160p | OMT_HQ | bars | 98 | 81 | 1355 | 253 | 1502 |
+| 1080p | LQ | natural | 92 | 168,577 | 1328 | 579 | **2048** |
+| 1080p | SQ | natural | 94 | 292,310 | 947 | 538 | **1327** |
+| 1080p | HQ | natural | 96 | 559,463 | 618 | 388 | **1130** |
+| 1080p | OMT_LQ | natural | 92 | 168,577 | 1335 | 635 | **2169** |
+| 1080p | OMT_SQ | natural | 95 | 418,883 | 777 | 462 | **1071** |
+| 1080p | OMT_HQ | natural | 96 | 559,463 | 614 | 424 | **1231** |
+| 1080p | LQ | bars | 98 | 22,008 | **4220** | 780 | 3692 |
+| 1080p | SQ | bars | 98 | 22,008 | **4521** | 780 | 4058 |
+| 1080p | HQ | bars | 98 | 24,303 | **4624** | 792 | 4497 |
+| 1080p | OMT_LQ | bars | 98 | 22,008 | **4405** | 780 | 4291 |
+| 1080p | OMT_SQ | bars | 98 | 24,303 | **4411** | 734 | 4380 |
+| 1080p | OMT_HQ | bars | 98 | 24,303 | 4301 | 781 | **4397** |
+| 2160p | LQ | natural | 92 | 595,921 | 430 | 193 | **636** |
+| 2160p | SQ | natural | 94 | 1,088,322 | 283 | 173 | **477** |
+| 2160p | HQ | natural | 96 | 2,145,917 | 185 | 129 | **209** |
+| 2160p | OMT_LQ | natural | 92 | 595,921 | 334 | 174 | **685** |
+| 2160p | OMT_SQ | natural | 92 | 595,921 | 423 | 202 | **645** |
+| 2160p | OMT_HQ | natural | 94 | 1,192,159 | 296 | 163 | **467** |
+| 2160p | LQ | bars | 98 | 76,145 | **1072** | 226 | 1068 |
+| 2160p | SQ | bars | 98 | 76,145 | **1223** | 242 | 1206 |
+| 2160p | HQ | bars | 98 | 80,733 | 1290 | 250 | **1583** |
+| 2160p | OMT_LQ | bars | 98 | 76,145 | 1261 | 242 | **1537** |
+| 2160p | OMT_SQ | bars | 98 | 76,145 | 1234 | 241 | **1523** |
+| 2160p | OMT_HQ | bars | 98 | 80,733 | 1355 | 253 | **1502** |
 
 ## x86-64 tables with the 128-bit path
 
 ### Encode, 1 thread
-| Resolution | Profile | Image | q | bytes/frame | libvmx AVX2 | libvmx 128-bit | vmx-codec | vmx | highest |
-|---|---|---|---|---|---|---|---|---|---|
-| 1080p | LQ | natural | 92 | 168,577 | 379 (±4%) | 271 (±4%) | 178 (±9%) | 322 (±4%) | libvmx |
-| 1080p | SQ | natural | 94 | 292,310 | 328 (±3%) | 234 (±3%) | 153 (±3%) | 279 (±2%) | libvmx |
-| 1080p | HQ | natural | 96 | 559,463 | 263 (±4%) | 178 (±4%) | 122 (±2%) | 179 (±5%) | libvmx |
-| 1080p | OMT_LQ | natural | 92 | 168,577 | 386 (±5%) | 272 (±3%) | 180 (±3%) | 339 (±12%) | libvmx |
-| 1080p | OMT_SQ | natural | 95 | 418,883 | 318 (±14%) | 222 (±1%) | 141 (±8%) | 225 (±3%) | libvmx |
-| 1080p | OMT_HQ | natural | 96 | 559,463 | 268 (±2%) | 190 (±3%) | 131 (±2%) | 200 (±1%) | libvmx |
-| 1080p | LQ | bars | 98 | 22,008 | 609 (±4%) | 409 (±1%) | 221 (±3%) | 514 (±3%) | libvmx |
-| 1080p | SQ | bars | 98 | 22,008 | 607 (±3%) | 404 (±2%) | 224 (±1%) | 511 (±1%) | libvmx |
-| 1080p | HQ | bars | 98 | 24,303 | 649 (±3%) | 407 (±1%) | 219 (±3%) | 506 (±6%) | libvmx |
-| 1080p | OMT_LQ | bars | 98 | 22,008 | 641 (±3%) | 409 (±4%) | 221 (±2%) | 517 (±8%) | libvmx |
-| 1080p | OMT_SQ | bars | 98 | 24,303 | 634 (±4%) | 414 (±1%) | 224 (±1%) | 506 (±1%) | libvmx |
-| 1080p | OMT_HQ | bars | 98 | 24,303 | 597 (±8%) | 412 (±2%) | 221 (±3%) | 510 (±3%) | libvmx |
-| 2160p | LQ | natural | 92 | 595,921 | 102 (±3%) | 65 (±6%) | 43 ✗ (±5%) | 78 (±9%) | libvmx |
-| 2160p | SQ | natural | 94 | 1,088,322 | 82 (±6%) | 56 ✗ (±4%) | 38 ✗ (±5%) | 68 (±8%) | libvmx |
-| 2160p | HQ | natural | 96 | 2,145,917 | 64 (±4%) | 43 ✗ (±4%) | 32 ✗ (±5%) | 48 ✗ (±4%) | libvmx |
-| 2160p | OMT_LQ | natural | 92 | 595,921 | 102 (±3%) | 56 ✗ (±14%) | 41 ✗ (±18%) | 86 (±5%) | libvmx |
-| 2160p | OMT_SQ | natural | 92 | 595,921 | 104 (±5%) | 71 (±1%) | 45 ✗ (±5%) | 86 (±7%) | libvmx |
-| 2160p | OMT_HQ | natural | 94 | 1,192,159 | 98 (±1%) | 65 (±1%) | 42 ✗ (±1%) | 64 (±4%) | libvmx |
-| 2160p | LQ | bars | 98 | 76,145 | 160 (±6%) | 104 (±8%) | 52 ✗ (±11%) | 117 (±7%) | libvmx |
-| 2160p | SQ | bars | 98 | 76,145 | 154 (±4%) | 108 (±1%) | 52 ✗ (±7%) | 118 (±3%) | libvmx |
-| 2160p | HQ | bars | 98 | 80,733 | 153 (±3%) | 102 (±10%) | 46 ✗ (±16%) | 120 (±4%) | libvmx |
-| 2160p | OMT_LQ | bars | 98 | 76,145 | 154 (±6%) | 99 (±4%) | 53 ✗ (±2%) | 118 (±1%) | libvmx |
-| 2160p | OMT_SQ | bars | 98 | 76,145 | 157 (±4%) | 97 (±11%) | 48 ✗ (±9%) | 115 (±2%) | libvmx |
-| 2160p | OMT_HQ | bars | 98 | 80,733 | 148 (±6%) | 101 (±2%) | 50 ✗ (±6%) | 116 (±6%) | libvmx |
+
+| Resolution | Profile | Image | q | bytes/frame | libvmx AVX2 | libvmx 128-bit | vmx-codec | vmx |
+|---|---|---|---:|---:|---:|---:|---:|---:|
+| 1080p | LQ | natural | 92 | 168,577 | **379** (±4%) | 271 (±4%) | 178 (±9%) | 322 (±4%) |
+| 1080p | SQ | natural | 94 | 292,310 | **328** (±3%) | 234 (±3%) | 153 (±3%) | 279 (±2%) |
+| 1080p | HQ | natural | 96 | 559,463 | **263** (±4%) | 178 (±4%) | 122 (±2%) | 179 (±5%) |
+| 1080p | OMT_LQ | natural | 92 | 168,577 | **386** (±5%) | 272 (±3%) | 180 (±3%) | 339 (±12%) |
+| 1080p | OMT_SQ | natural | 95 | 418,883 | **318** (±14%) | 222 (±1%) | 141 (±8%) | 225 (±3%) |
+| 1080p | OMT_HQ | natural | 96 | 559,463 | **268** (±2%) | 190 (±3%) | 131 (±2%) | 200 (±1%) |
+| 1080p | LQ | bars | 98 | 22,008 | **609** (±4%) | 409 (±1%) | 221 (±3%) | 514 (±3%) |
+| 1080p | SQ | bars | 98 | 22,008 | **607** (±3%) | 404 (±2%) | 224 (±1%) | 511 (±1%) |
+| 1080p | HQ | bars | 98 | 24,303 | **649** (±3%) | 407 (±1%) | 219 (±3%) | 506 (±6%) |
+| 1080p | OMT_LQ | bars | 98 | 22,008 | **641** (±3%) | 409 (±4%) | 221 (±2%) | 517 (±8%) |
+| 1080p | OMT_SQ | bars | 98 | 24,303 | **634** (±4%) | 414 (±1%) | 224 (±1%) | 506 (±1%) |
+| 1080p | OMT_HQ | bars | 98 | 24,303 | **597** (±8%) | 412 (±2%) | 221 (±3%) | 510 (±3%) |
+| 2160p | LQ | natural | 92 | 595,921 | **102** (±3%) | 65 (±6%) | 43 ✗ (±5%) | 78 (±9%) |
+| 2160p | SQ | natural | 94 | 1,088,322 | **82** (±6%) | 56 ✗ (±4%) | 38 ✗ (±5%) | 68 (±8%) |
+| 2160p | HQ | natural | 96 | 2,145,917 | **64** (±4%) | 43 ✗ (±4%) | 32 ✗ (±5%) | 48 ✗ (±4%) |
+| 2160p | OMT_LQ | natural | 92 | 595,921 | **102** (±3%) | 56 ✗ (±14%) | 41 ✗ (±18%) | 86 (±5%) |
+| 2160p | OMT_SQ | natural | 92 | 595,921 | **104** (±5%) | 71 (±1%) | 45 ✗ (±5%) | 86 (±7%) |
+| 2160p | OMT_HQ | natural | 94 | 1,192,159 | **98** (±1%) | 65 (±1%) | 42 ✗ (±1%) | 64 (±4%) |
+| 2160p | LQ | bars | 98 | 76,145 | **160** (±6%) | 104 (±8%) | 52 ✗ (±11%) | 117 (±7%) |
+| 2160p | SQ | bars | 98 | 76,145 | **154** (±4%) | 108 (±1%) | 52 ✗ (±7%) | 118 (±3%) |
+| 2160p | HQ | bars | 98 | 80,733 | **153** (±3%) | 102 (±10%) | 46 ✗ (±16%) | 120 (±4%) |
+| 2160p | OMT_LQ | bars | 98 | 76,145 | **154** (±6%) | 99 (±4%) | 53 ✗ (±2%) | 118 (±1%) |
+| 2160p | OMT_SQ | bars | 98 | 76,145 | **157** (±4%) | 97 (±11%) | 48 ✗ (±9%) | 115 (±2%) |
+| 2160p | OMT_HQ | bars | 98 | 80,733 | **148** (±6%) | 101 (±2%) | 50 ✗ (±6%) | 116 (±6%) |
 
 ### Encode, 8 threads
-| Resolution | Profile | Image | q | bytes/frame | libvmx AVX2 | libvmx 128-bit | vmx-codec | vmx | highest |
-|---|---|---|---|---|---|---|---|---|---|
-| 1080p | LQ | natural | 92 | 168,577 | 1331 (±3%) | 906 (±5%) | 398 (±5%) | 2011 (±3%) | vmx |
-| 1080p | SQ | natural | 94 | 292,310 | 1070 (±4%) | 791 (±5%) | 424 (±5%) | 1470 (±8%) | vmx |
-| 1080p | HQ | natural | 96 | 559,463 | 796 (±5%) | 590 (±5%) | 348 (±7%) | 1181 (±4%) | vmx |
-| 1080p | OMT_LQ | natural | 92 | 168,577 | 1296 (±3%) | 863 (±8%) | 426 (±6%) | 2110 (±2%) | vmx |
-| 1080p | OMT_SQ | natural | 95 | 418,883 | 988 (±6%) | 721 (±1%) | 342 (±60%) | 1117 (±9%) | vmx |
-| 1080p | OMT_HQ | natural | 96 | 559,463 | 821 (±3%) | 606 (±3%) | 393 (±5%) | 1221 (±4%) | vmx |
-| 1080p | LQ | bars | 98 | 22,008 | 2086 (±4%) | 1404 (±11%) | 482 (±5%) | 2843 (±8%) | vmx |
-| 1080p | SQ | bars | 98 | 22,008 | 2122 (±7%) | 1425 (±10%) | 481 (±3%) | 3249 (±4%) | vmx |
-| 1080p | HQ | bars | 98 | 24,303 | 2062 (±10%) | 1421 (±5%) | 462 (±1%) | 3195 (±2%) | vmx |
-| 1080p | OMT_LQ | bars | 98 | 22,008 | 2167 (±3%) | 1421 (±3%) | 492 (±6%) | 3139 (±5%) | vmx |
-| 1080p | OMT_SQ | bars | 98 | 24,303 | 2098 (±2%) | 1398 (±7%) | 449 (±9%) | 2843 (±5%) | vmx |
-| 1080p | OMT_HQ | bars | 98 | 24,303 | 2066 (±3%) | 1432 (±5%) | 482 (±5%) | 2496 (±5%) | vmx |
-| 2160p | LQ | natural | 92 | 595,921 | 366 (±6%) | 257 (±6%) | 132 (±6%) | 544 (±6%) | vmx |
-| 2160p | SQ | natural | 94 | 1,088,322 | 300 (±9%) | 247 (±7%) | 125 (±5%) | 451 (±4%) | vmx |
-| 2160p | HQ | natural | 96 | 2,145,917 | 256 (±6%) | 220 (±13%) | 101 (±8%) | 330 (±5%) | vmx |
-| 2160p | OMT_LQ | natural | 92 | 595,921 | 368 (±3%) | 245 (±8%) | 125 (±15%) | 572 (±7%) | vmx |
-| 2160p | OMT_SQ | natural | 92 | 595,921 | 358 (±12%) | 257 (±4%) | 133 (±4%) | 544 (±3%) | vmx |
-| 2160p | OMT_HQ | natural | 94 | 1,192,159 | 348 (±5%) | 253 (±4%) | 117 (±8%) | 456 (±3%) | vmx |
-| 2160p | LQ | bars | 98 | 76,145 | 571 (±4%) | 375 (±5%) | 122 (±2%) | 734 (±9%) | vmx |
-| 2160p | SQ | bars | 98 | 76,145 | 540 (±3%) | 340 (±6%) | 115 (±9%) | 839 (±4%) | vmx |
-| 2160p | HQ | bars | 98 | 80,733 | 540 (±1%) | 368 (±3%) | 128 (±6%) | 836 (±3%) | vmx |
-| 2160p | OMT_LQ | bars | 98 | 76,145 | 515 (±5%) | 352 (±5%) | 119 (±7%) | 814 (±7%) | vmx |
-| 2160p | OMT_SQ | bars | 98 | 76,145 | 524 (±10%) | 360 (±3%) | 123 (±6%) | 796 (±2%) | vmx |
-| 2160p | OMT_HQ | bars | 98 | 80,733 | 530 (±2%) | 352 (±7%) | 135 (±7%) | 811 (±8%) | vmx |
+
+| Resolution | Profile | Image | q | bytes/frame | libvmx AVX2 | libvmx 128-bit | vmx-codec | vmx |
+|---|---|---|---:|---:|---:|---:|---:|---:|
+| 1080p | LQ | natural | 92 | 168,577 | 1331 (±3%) | 906 (±5%) | 398 (±5%) | **2011** (±3%) |
+| 1080p | SQ | natural | 94 | 292,310 | 1070 (±4%) | 791 (±5%) | 424 (±5%) | **1470** (±8%) |
+| 1080p | HQ | natural | 96 | 559,463 | 796 (±5%) | 590 (±5%) | 348 (±7%) | **1181** (±4%) |
+| 1080p | OMT_LQ | natural | 92 | 168,577 | 1296 (±3%) | 863 (±8%) | 426 (±6%) | **2110** (±2%) |
+| 1080p | OMT_SQ | natural | 95 | 418,883 | 988 (±6%) | 721 (±1%) | 342 (±60%) | **1117** (±9%) |
+| 1080p | OMT_HQ | natural | 96 | 559,463 | 821 (±3%) | 606 (±3%) | 393 (±5%) | **1221** (±4%) |
+| 1080p | LQ | bars | 98 | 22,008 | 2086 (±4%) | 1404 (±11%) | 482 (±5%) | **2843** (±8%) |
+| 1080p | SQ | bars | 98 | 22,008 | 2122 (±7%) | 1425 (±10%) | 481 (±3%) | **3249** (±4%) |
+| 1080p | HQ | bars | 98 | 24,303 | 2062 (±10%) | 1421 (±5%) | 462 (±1%) | **3195** (±2%) |
+| 1080p | OMT_LQ | bars | 98 | 22,008 | 2167 (±3%) | 1421 (±3%) | 492 (±6%) | **3139** (±5%) |
+| 1080p | OMT_SQ | bars | 98 | 24,303 | 2098 (±2%) | 1398 (±7%) | 449 (±9%) | **2843** (±5%) |
+| 1080p | OMT_HQ | bars | 98 | 24,303 | 2066 (±3%) | 1432 (±5%) | 482 (±5%) | **2496** (±5%) |
+| 2160p | LQ | natural | 92 | 595,921 | 366 (±6%) | 257 (±6%) | 132 (±6%) | **544** (±6%) |
+| 2160p | SQ | natural | 94 | 1,088,322 | 300 (±9%) | 247 (±7%) | 125 (±5%) | **451** (±4%) |
+| 2160p | HQ | natural | 96 | 2,145,917 | 256 (±6%) | 220 (±13%) | 101 (±8%) | **330** (±5%) |
+| 2160p | OMT_LQ | natural | 92 | 595,921 | 368 (±3%) | 245 (±8%) | 125 (±15%) | **572** (±7%) |
+| 2160p | OMT_SQ | natural | 92 | 595,921 | 358 (±12%) | 257 (±4%) | 133 (±4%) | **544** (±3%) |
+| 2160p | OMT_HQ | natural | 94 | 1,192,159 | 348 (±5%) | 253 (±4%) | 117 (±8%) | **456** (±3%) |
+| 2160p | LQ | bars | 98 | 76,145 | 571 (±4%) | 375 (±5%) | 122 (±2%) | **734** (±9%) |
+| 2160p | SQ | bars | 98 | 76,145 | 540 (±3%) | 340 (±6%) | 115 (±9%) | **839** (±4%) |
+| 2160p | HQ | bars | 98 | 80,733 | 540 (±1%) | 368 (±3%) | 128 (±6%) | **836** (±3%) |
+| 2160p | OMT_LQ | bars | 98 | 76,145 | 515 (±5%) | 352 (±5%) | 119 (±7%) | **814** (±7%) |
+| 2160p | OMT_SQ | bars | 98 | 76,145 | 524 (±10%) | 360 (±3%) | 123 (±6%) | **796** (±2%) |
+| 2160p | OMT_HQ | bars | 98 | 80,733 | 530 (±2%) | 352 (±7%) | 135 (±7%) | **811** (±8%) |
 
 ### Decode, 1 thread
-| Resolution | Profile | Image | q | bytes/frame | libvmx AVX2 | libvmx 128-bit | vmx-codec | vmx | highest |
-|---|---|---|---|---|---|---|---|---|---|
-| 1080p | LQ | natural | 92 | 168,577 | 407 (±6%) | 364 (±2%) | 269 (±5%) | 372 (±2%) | libvmx |
-| 1080p | SQ | natural | 94 | 292,310 | 285 (±6%) | 265 (±3%) | 193 (±1%) | 292 (±1%) | vmx |
-| 1080p | HQ | natural | 96 | 559,463 | 195 (±2%) | 163 (±4%) | 106 (±2%) | 188 (±5%) | libvmx |
-| 1080p | OMT_LQ | natural | 92 | 168,577 | 410 (±2%) | 361 (±4%) | 277 (±6%) | 377 (±5%) | libvmx |
-| 1080p | OMT_SQ | natural | 95 | 418,883 | 242 (±2%) | 216 (±1%) | 151 (±1%) | 231 (±2%) | libvmx |
-| 1080p | OMT_HQ | natural | 96 | 559,463 | 186 (±4%) | 167 (±8%) | 114 (±1%) | 200 (±1%) | vmx |
-| 1080p | LQ | bars | 98 | 22,008 | 1202 (±7%) | 1245 (±6%) | 757 (±2%) | 914 (±4%) | libvmx 128-bit |
-| 1080p | SQ | bars | 98 | 22,008 | 1276 (±9%) | 1303 (±4%) | 788 (±3%) | 958 (±1%) | libvmx 128-bit |
-| 1080p | HQ | bars | 98 | 24,303 | 1245 (±1%) | 1291 (±2%) | 775 (±1%) | 957 (±1%) | libvmx 128-bit |
-| 1080p | OMT_LQ | bars | 98 | 22,008 | 1265 (±10%) | 1256 (±3%) | 777 (±1%) | 984 (±4%) | libvmx |
-| 1080p | OMT_SQ | bars | 98 | 24,303 | 1244 (±7%) | 1288 (±4%) | 751 (±5%) | 956 (±1%) | libvmx 128-bit |
-| 1080p | OMT_HQ | bars | 98 | 24,303 | 1202 (±4%) | 1270 (±4%) | 784 (±1%) | 988 (±1%) | libvmx 128-bit |
-| 2160p | LQ | natural | 92 | 595,921 | 117 (±2%) | 101 (±13%) | 75 (±1%) | 92 (±11%) | libvmx |
-| 2160p | SQ | natural | 94 | 1,088,322 | 74 (±8%) | 60 (±7%) | 50 ✗ (±2%) | 62 (±7%) | libvmx |
-| 2160p | HQ | natural | 96 | 2,145,917 | 44 ✗ (±4%) | 38 ✗ (±3%) | 27 ✗ (±1%) | 46 ✗ (±4%) | vmx |
-| 2160p | OMT_LQ | natural | 92 | 595,921 | 110 (±6%) | 96 (±5%) | 75 (±2%) | 103 (±3%) | libvmx |
-| 2160p | OMT_SQ | natural | 92 | 595,921 | 119 (±2%) | 102 (±5%) | 75 (±1%) | 101 (±3%) | libvmx |
-| 2160p | OMT_HQ | natural | 94 | 1,192,159 | 84 (±1%) | 73 (±4%) | 52 ✗ (±2%) | 62 (±2%) | libvmx |
-| 2160p | LQ | bars | 98 | 76,145 | 368 (±12%) | 364 (±5%) | 181 (±11%) | 263 (±1%) | libvmx |
-| 2160p | SQ | bars | 98 | 76,145 | 355 (±6%) | 375 (±8%) | 189 (±10%) | 248 (±10%) | libvmx 128-bit |
-| 2160p | HQ | bars | 98 | 80,733 | 349 (±3%) | 363 (±3%) | 170 (±7%) | 250 (±2%) | libvmx 128-bit |
-| 2160p | OMT_LQ | bars | 98 | 76,145 | 366 (±9%) | 359 (±2%) | 186 (±9%) | 244 (±7%) | libvmx |
-| 2160p | OMT_SQ | bars | 98 | 76,145 | 346 (±4%) | 357 (±2%) | 179 (±6%) | 234 (±17%) | libvmx 128-bit |
-| 2160p | OMT_HQ | bars | 98 | 80,733 | 346 (±4%) | 342 (±8%) | 189 (±1%) | 246 (±2%) | libvmx |
+
+| Resolution | Profile | Image | q | bytes/frame | libvmx AVX2 | libvmx 128-bit | vmx-codec | vmx |
+|---|---|---|---:|---:|---:|---:|---:|---:|
+| 1080p | LQ | natural | 92 | 168,577 | **407** (±6%) | 364 (±2%) | 269 (±5%) | 372 (±2%) |
+| 1080p | SQ | natural | 94 | 292,310 | 285 (±6%) | 265 (±3%) | 193 (±1%) | **292** (±1%) |
+| 1080p | HQ | natural | 96 | 559,463 | **195** (±2%) | 163 (±4%) | 106 (±2%) | 188 (±5%) |
+| 1080p | OMT_LQ | natural | 92 | 168,577 | **410** (±2%) | 361 (±4%) | 277 (±6%) | 377 (±5%) |
+| 1080p | OMT_SQ | natural | 95 | 418,883 | **242** (±2%) | 216 (±1%) | 151 (±1%) | 231 (±2%) |
+| 1080p | OMT_HQ | natural | 96 | 559,463 | 186 (±4%) | 167 (±8%) | 114 (±1%) | **200** (±1%) |
+| 1080p | LQ | bars | 98 | 22,008 | 1202 (±7%) | **1245** (±6%) | 757 (±2%) | 914 (±4%) |
+| 1080p | SQ | bars | 98 | 22,008 | 1276 (±9%) | **1303** (±4%) | 788 (±3%) | 958 (±1%) |
+| 1080p | HQ | bars | 98 | 24,303 | 1245 (±1%) | **1291** (±2%) | 775 (±1%) | 957 (±1%) |
+| 1080p | OMT_LQ | bars | 98 | 22,008 | **1265** (±10%) | 1256 (±3%) | 777 (±1%) | 984 (±4%) |
+| 1080p | OMT_SQ | bars | 98 | 24,303 | 1244 (±7%) | **1288** (±4%) | 751 (±5%) | 956 (±1%) |
+| 1080p | OMT_HQ | bars | 98 | 24,303 | 1202 (±4%) | **1270** (±4%) | 784 (±1%) | 988 (±1%) |
+| 2160p | LQ | natural | 92 | 595,921 | **117** (±2%) | 101 (±13%) | 75 (±1%) | 92 (±11%) |
+| 2160p | SQ | natural | 94 | 1,088,322 | **74** (±8%) | 60 (±7%) | 50 ✗ (±2%) | 62 (±7%) |
+| 2160p | HQ | natural | 96 | 2,145,917 | 44 ✗ (±4%) | 38 ✗ (±3%) | 27 ✗ (±1%) | **46** ✗ (±4%) |
+| 2160p | OMT_LQ | natural | 92 | 595,921 | **110** (±6%) | 96 (±5%) | 75 (±2%) | 103 (±3%) |
+| 2160p | OMT_SQ | natural | 92 | 595,921 | **119** (±2%) | 102 (±5%) | 75 (±1%) | 101 (±3%) |
+| 2160p | OMT_HQ | natural | 94 | 1,192,159 | **84** (±1%) | 73 (±4%) | 52 ✗ (±2%) | 62 (±2%) |
+| 2160p | LQ | bars | 98 | 76,145 | **368** (±12%) | 364 (±5%) | 181 (±11%) | 263 (±1%) |
+| 2160p | SQ | bars | 98 | 76,145 | 355 (±6%) | **375** (±8%) | 189 (±10%) | 248 (±10%) |
+| 2160p | HQ | bars | 98 | 80,733 | 349 (±3%) | **363** (±3%) | 170 (±7%) | 250 (±2%) |
+| 2160p | OMT_LQ | bars | 98 | 76,145 | **366** (±9%) | 359 (±2%) | 186 (±9%) | 244 (±7%) |
+| 2160p | OMT_SQ | bars | 98 | 76,145 | 346 (±4%) | **357** (±2%) | 179 (±6%) | 234 (±17%) |
+| 2160p | OMT_HQ | bars | 98 | 80,733 | **346** (±4%) | 342 (±8%) | 189 (±1%) | 246 (±2%) |
 
 ### Decode, 8 threads
-| Resolution | Profile | Image | q | bytes/frame | libvmx AVX2 | libvmx 128-bit | vmx-codec | vmx | highest |
-|---|---|---|---|---|---|---|---|---|---|
-| 1080p | LQ | natural | 92 | 168,577 | 1328 (±5%) | 1197 (±7%) | 579 (±2%) | 2048 (±6%) | vmx |
-| 1080p | SQ | natural | 94 | 292,310 | 947 (±5%) | 904 (±2%) | 538 (±4%) | 1327 (±16%) | vmx |
-| 1080p | HQ | natural | 96 | 559,463 | 618 (±11%) | 540 (±26%) | 388 (±1%) | 1130 (±4%) | vmx |
-| 1080p | OMT_LQ | natural | 92 | 168,577 | 1335 (±4%) | 1153 (±2%) | 635 (±2%) | 2169 (±5%) | vmx |
-| 1080p | OMT_SQ | natural | 95 | 418,883 | 777 (±7%) | 664 (±7%) | 462 (±8%) | 1071 (±6%) | vmx |
-| 1080p | OMT_HQ | natural | 96 | 559,463 | 614 (±3%) | 559 (±1%) | 424 (±3%) | 1231 (±4%) | vmx |
-| 1080p | LQ | bars | 98 | 22,008 | 4220 (±3%) | 4660 (±4%) | 780 (±4%) | 3692 (±8%) | libvmx 128-bit |
-| 1080p | SQ | bars | 98 | 22,008 | 4521 (±2%) | 4652 (±4%) | 780 (±4%) | 4058 (±13%) | libvmx 128-bit |
-| 1080p | HQ | bars | 98 | 24,303 | 4624 (±5%) | 4063 (±5%) | 792 (±4%) | 4497 (±3%) | libvmx |
-| 1080p | OMT_LQ | bars | 98 | 22,008 | 4405 (±3%) | 4579 (±4%) | 780 (±1%) | 4291 (±2%) | libvmx 128-bit |
-| 1080p | OMT_SQ | bars | 98 | 24,303 | 4411 (±3%) | 4674 (±3%) | 734 (±4%) | 4380 (±11%) | libvmx 128-bit |
-| 1080p | OMT_HQ | bars | 98 | 24,303 | 4301 (±2%) | 4460 (±2%) | 781 (±1%) | 4397 (±3%) | libvmx 128-bit |
-| 2160p | LQ | natural | 92 | 595,921 | 430 (±6%) | 362 (±6%) | 193 (±3%) | 636 (±3%) | vmx |
-| 2160p | SQ | natural | 94 | 1,088,322 | 283 (±21%) | 256 (±7%) | 173 (±3%) | 477 (±3%) | vmx |
-| 2160p | HQ | natural | 96 | 2,145,917 | 185 (±6%) | 207 (±16%) | 129 (±5%) | 209 (±50%) | vmx |
-| 2160p | OMT_LQ | natural | 92 | 595,921 | 334 (±61%) | 310 (±18%) | 174 (±8%) | 685 (±5%) | vmx |
-| 2160p | OMT_SQ | natural | 92 | 595,921 | 423 (±4%) | 382 (±9%) | 202 (±2%) | 645 (±7%) | vmx |
-| 2160p | OMT_HQ | natural | 94 | 1,192,159 | 296 (±9%) | 273 (±5%) | 163 (±6%) | 467 (±7%) | vmx |
-| 2160p | LQ | bars | 98 | 76,145 | 1072 (±8%) | 1052 (±3%) | 226 (±5%) | 1068 (±7%) | libvmx |
-| 2160p | SQ | bars | 98 | 76,145 | 1223 (±6%) | 914 (±15%) | 242 (±4%) | 1206 (±11%) | libvmx |
-| 2160p | HQ | bars | 98 | 80,733 | 1290 (±17%) | 1179 (±9%) | 250 (±2%) | 1583 (±3%) | vmx |
-| 2160p | OMT_LQ | bars | 98 | 76,145 | 1261 (±20%) | 1279 (±7%) | 242 (±2%) | 1537 (±6%) | vmx |
-| 2160p | OMT_SQ | bars | 98 | 76,145 | 1234 (±12%) | 1283 (±8%) | 241 (±4%) | 1523 (±4%) | vmx |
-| 2160p | OMT_HQ | bars | 98 | 80,733 | 1355 (±18%) | 1214 (±4%) | 253 (±2%) | 1502 (±5%) | vmx |
+
+| Resolution | Profile | Image | q | bytes/frame | libvmx AVX2 | libvmx 128-bit | vmx-codec | vmx |
+|---|---|---|---:|---:|---:|---:|---:|---:|
+| 1080p | LQ | natural | 92 | 168,577 | 1328 (±5%) | 1197 (±7%) | 579 (±2%) | **2048** (±6%) |
+| 1080p | SQ | natural | 94 | 292,310 | 947 (±5%) | 904 (±2%) | 538 (±4%) | **1327** (±16%) |
+| 1080p | HQ | natural | 96 | 559,463 | 618 (±11%) | 540 (±26%) | 388 (±1%) | **1130** (±4%) |
+| 1080p | OMT_LQ | natural | 92 | 168,577 | 1335 (±4%) | 1153 (±2%) | 635 (±2%) | **2169** (±5%) |
+| 1080p | OMT_SQ | natural | 95 | 418,883 | 777 (±7%) | 664 (±7%) | 462 (±8%) | **1071** (±6%) |
+| 1080p | OMT_HQ | natural | 96 | 559,463 | 614 (±3%) | 559 (±1%) | 424 (±3%) | **1231** (±4%) |
+| 1080p | LQ | bars | 98 | 22,008 | 4220 (±3%) | **4660** (±4%) | 780 (±4%) | 3692 (±8%) |
+| 1080p | SQ | bars | 98 | 22,008 | 4521 (±2%) | **4652** (±4%) | 780 (±4%) | 4058 (±13%) |
+| 1080p | HQ | bars | 98 | 24,303 | **4624** (±5%) | 4063 (±5%) | 792 (±4%) | 4497 (±3%) |
+| 1080p | OMT_LQ | bars | 98 | 22,008 | 4405 (±3%) | **4579** (±4%) | 780 (±1%) | 4291 (±2%) |
+| 1080p | OMT_SQ | bars | 98 | 24,303 | 4411 (±3%) | **4674** (±3%) | 734 (±4%) | 4380 (±11%) |
+| 1080p | OMT_HQ | bars | 98 | 24,303 | 4301 (±2%) | **4460** (±2%) | 781 (±1%) | 4397 (±3%) |
+| 2160p | LQ | natural | 92 | 595,921 | 430 (±6%) | 362 (±6%) | 193 (±3%) | **636** (±3%) |
+| 2160p | SQ | natural | 94 | 1,088,322 | 283 (±21%) | 256 (±7%) | 173 (±3%) | **477** (±3%) |
+| 2160p | HQ | natural | 96 | 2,145,917 | 185 (±6%) | 207 (±16%) | 129 (±5%) | **209** (±50%) |
+| 2160p | OMT_LQ | natural | 92 | 595,921 | 334 (±61%) | 310 (±18%) | 174 (±8%) | **685** (±5%) |
+| 2160p | OMT_SQ | natural | 92 | 595,921 | 423 (±4%) | 382 (±9%) | 202 (±2%) | **645** (±7%) |
+| 2160p | OMT_HQ | natural | 94 | 1,192,159 | 296 (±9%) | 273 (±5%) | 163 (±6%) | **467** (±7%) |
+| 2160p | LQ | bars | 98 | 76,145 | **1072** (±8%) | 1052 (±3%) | 226 (±5%) | 1068 (±7%) |
+| 2160p | SQ | bars | 98 | 76,145 | **1223** (±6%) | 914 (±15%) | 242 (±4%) | 1206 (±11%) |
+| 2160p | HQ | bars | 98 | 80,733 | 1290 (±17%) | 1179 (±9%) | 250 (±2%) | **1583** (±3%) |
+| 2160p | OMT_LQ | bars | 98 | 76,145 | 1261 (±20%) | 1279 (±7%) | 242 (±2%) | **1537** (±6%) |
+| 2160p | OMT_SQ | bars | 98 | 76,145 | 1234 (±12%) | 1283 (±8%) | 241 (±4%) | **1523** (±4%) |
+| 2160p | OMT_HQ | bars | 98 | 80,733 | 1355 (±18%) | 1214 (±4%) | 253 (±2%) | **1502** (±5%) |
 
 
 ## ARM / NEON
@@ -331,7 +332,7 @@ Same harness and the same pictures as the x86-64 run. The settled `q` and the fr
 
 libvmx is the official ARM build (`vmxcodec_arm.cpp`, NEON through sse2neon, no `-mavx2`). That build does not compile the 256-bit path, so there is one libvmx column. vmx-codec reports `NEON (compile-time)`. vmx reports `dct=Neon` and `color=Neon`. On both hosts, all 288 rows matched libvmx byte for byte on encode and pixel for pixel on decode. 10-bit P216 / PA16 was not measured: the harness again got `invalid parameters` from `encode_p216`, `decode_p216`, `encode_pa16`, and `decode_pa16`.
 
-`✗` means the median is below 60 fps, using the unrounded median (a value that rounds to 60 can still be under 60). `KB/frame` is `bytes / 1000`, rounded. Min and max of the seven runs are in the CSV files linked below.
+`✗` means the median is below 60 fps, using the unrounded median (a value that rounds to 60 can still be under 60). `bytes/frame` is the exact encoded size. Min and max of the seven runs are in the CSV files linked below.
 
 The ratio tables are `median / libvmx` on that host. libvmx here is the sse2neon path, not the AVX2 path in the x86-64 tables. The geometric mean is over the 24 rows of that operation and thread count. The range is the smallest and largest ratio.
 
@@ -369,119 +370,119 @@ The 1-thread encode ratios sit within a few percent of each other across all 24 
 
 ### Encode, 1 thread
 
-| Resolution | Profile | Image | q | KB/frame | libvmx | vmx-codec | vmx |
+| Resolution | Profile | Image | q | bytes/frame | libvmx | vmx-codec | vmx |
 |---|---|---|---:|---:|---:|---:|---:|
-| 1080p | LQ | natural | 92 | 169 | 139 | 148 | 123 |
-| 1080p | SQ | natural | 94 | 292 | 130 | 135 | 114 |
-| 1080p | HQ | natural | 96 | 559 | 113 | 115 | 98 |
-| 1080p | OMT_LQ | natural | 92 | 169 | 140 | 147 | 123 |
-| 1080p | OMT_SQ | natural | 95 | 419 | 122 | 127 | 107 |
-| 1080p | OMT_HQ | natural | 96 | 559 | 113 | 115 | 98 |
-| 1080p | LQ | bars | 98 | 22 | 162 | 169 | 138 |
-| 1080p | SQ | bars | 98 | 22 | 162 | 170 | 139 |
-| 1080p | HQ | bars | 98 | 24 | 162 | 170 | 139 |
-| 1080p | OMT_LQ | bars | 98 | 22 | 162 | 171 | 139 |
-| 1080p | OMT_SQ | bars | 98 | 24 | 162 | 171 | 138 |
-| 1080p | OMT_HQ | bars | 98 | 24 | 162 | 171 | 137 |
-| 2160p | LQ | natural | 92 | 596 | 35 ✗ | 37 ✗ | 31 ✗ |
-| 2160p | SQ | natural | 94 | 1088 | 33 ✗ | 34 ✗ | 29 ✗ |
-| 2160p | HQ | natural | 96 | 2146 | 29 ✗ | 29 ✗ | 25 ✗ |
-| 2160p | OMT_LQ | natural | 92 | 596 | 35 ✗ | 37 ✗ | 31 ✗ |
-| 2160p | OMT_SQ | natural | 92 | 596 | 35 ✗ | 37 ✗ | 31 ✗ |
-| 2160p | OMT_HQ | natural | 94 | 1192 | 33 ✗ | 34 ✗ | 28 ✗ |
-| 2160p | LQ | bars | 98 | 76 | 40 ✗ | 42 ✗ | 34 ✗ |
-| 2160p | SQ | bars | 98 | 76 | 40 ✗ | 42 ✗ | 34 ✗ |
-| 2160p | HQ | bars | 98 | 81 | 40 ✗ | 42 ✗ | 35 ✗ |
-| 2160p | OMT_LQ | bars | 98 | 76 | 40 ✗ | 42 ✗ | 35 ✗ |
-| 2160p | OMT_SQ | bars | 98 | 76 | 40 ✗ | 42 ✗ | 35 ✗ |
-| 2160p | OMT_HQ | bars | 98 | 81 | 40 ✗ | 42 ✗ | 35 ✗ |
+| 1080p | LQ | natural | 92 | 168,577 | 139 | **148** | 123 |
+| 1080p | SQ | natural | 94 | 292,310 | 130 | **135** | 114 |
+| 1080p | HQ | natural | 96 | 559,463 | 113 | **115** | 98 |
+| 1080p | OMT_LQ | natural | 92 | 168,577 | 140 | **147** | 123 |
+| 1080p | OMT_SQ | natural | 95 | 418,883 | 122 | **127** | 107 |
+| 1080p | OMT_HQ | natural | 96 | 559,463 | 113 | **115** | 98 |
+| 1080p | LQ | bars | 98 | 22,008 | 162 | **169** | 138 |
+| 1080p | SQ | bars | 98 | 22,008 | 162 | **170** | 139 |
+| 1080p | HQ | bars | 98 | 24,303 | 162 | **170** | 139 |
+| 1080p | OMT_LQ | bars | 98 | 22,008 | 162 | **171** | 139 |
+| 1080p | OMT_SQ | bars | 98 | 24,303 | 162 | **171** | 138 |
+| 1080p | OMT_HQ | bars | 98 | 24,303 | 162 | **171** | 137 |
+| 2160p | LQ | natural | 92 | 595,921 | 35 ✗ | **37** ✗ | 31 ✗ |
+| 2160p | SQ | natural | 94 | 1,088,322 | 33 ✗ | **34** ✗ | 29 ✗ |
+| 2160p | HQ | natural | 96 | 2,145,917 | **29** ✗ | **29** ✗ | 25 ✗ |
+| 2160p | OMT_LQ | natural | 92 | 595,921 | 35 ✗ | **37** ✗ | 31 ✗ |
+| 2160p | OMT_SQ | natural | 92 | 595,921 | 35 ✗ | **37** ✗ | 31 ✗ |
+| 2160p | OMT_HQ | natural | 94 | 1,192,159 | 33 ✗ | **34** ✗ | 28 ✗ |
+| 2160p | LQ | bars | 98 | 76,145 | 40 ✗ | **42** ✗ | 34 ✗ |
+| 2160p | SQ | bars | 98 | 76,145 | 40 ✗ | **42** ✗ | 34 ✗ |
+| 2160p | HQ | bars | 98 | 80,733 | 40 ✗ | **42** ✗ | 35 ✗ |
+| 2160p | OMT_LQ | bars | 98 | 76,145 | 40 ✗ | **42** ✗ | 35 ✗ |
+| 2160p | OMT_SQ | bars | 98 | 76,145 | 40 ✗ | **42** ✗ | 35 ✗ |
+| 2160p | OMT_HQ | bars | 98 | 80,733 | 40 ✗ | **42** ✗ | 35 ✗ |
 
 ### Encode, 4 threads
 
-| Resolution | Profile | Image | q | KB/frame | libvmx | vmx-codec | vmx |
+| Resolution | Profile | Image | q | bytes/frame | libvmx | vmx-codec | vmx |
 |---|---|---|---:|---:|---:|---:|---:|
-| 1080p | LQ | natural | 92 | 169 | 536 | 488 | 476 |
-| 1080p | SQ | natural | 94 | 292 | 514 | 457 | 443 |
-| 1080p | HQ | natural | 96 | 559 | 443 | 394 | 378 |
-| 1080p | OMT_LQ | natural | 92 | 169 | 551 | 486 | 475 |
-| 1080p | OMT_SQ | natural | 95 | 419 | 483 | 421 | 412 |
-| 1080p | OMT_HQ | natural | 96 | 559 | 440 | 389 | 376 |
-| 1080p | LQ | bars | 98 | 22 | 633 | 548 | 522 |
-| 1080p | SQ | bars | 98 | 22 | 625 | 550 | 539 |
-| 1080p | HQ | bars | 98 | 24 | 634 | 553 | 536 |
-| 1080p | OMT_LQ | bars | 98 | 22 | 632 | 553 | 540 |
-| 1080p | OMT_SQ | bars | 98 | 24 | 637 | 544 | 541 |
-| 1080p | OMT_HQ | bars | 98 | 24 | 634 | 541 | 540 |
-| 2160p | LQ | natural | 92 | 596 | 124 | 130 | 120 |
-| 2160p | SQ | natural | 94 | 1088 | 119 | 117 | 113 |
-| 2160p | HQ | natural | 96 | 2146 | 103 | 102 | 96 |
-| 2160p | OMT_LQ | natural | 92 | 596 | 125 | 129 | 122 |
-| 2160p | OMT_SQ | natural | 92 | 596 | 128 | 128 | 121 |
-| 2160p | OMT_HQ | natural | 94 | 1192 | 118 | 116 | 111 |
-| 2160p | LQ | bars | 98 | 76 | 149 | 143 | 134 |
-| 2160p | SQ | bars | 98 | 76 | 147 | 144 | 134 |
-| 2160p | HQ | bars | 98 | 81 | 149 | 145 | 134 |
-| 2160p | OMT_LQ | bars | 98 | 76 | 149 | 142 | 134 |
-| 2160p | OMT_SQ | bars | 98 | 76 | 149 | 146 | 135 |
-| 2160p | OMT_HQ | bars | 98 | 81 | 150 | 142 | 135 |
+| 1080p | LQ | natural | 92 | 168,577 | **536** | 488 | 476 |
+| 1080p | SQ | natural | 94 | 292,310 | **514** | 457 | 443 |
+| 1080p | HQ | natural | 96 | 559,463 | **443** | 394 | 378 |
+| 1080p | OMT_LQ | natural | 92 | 168,577 | **551** | 486 | 475 |
+| 1080p | OMT_SQ | natural | 95 | 418,883 | **483** | 421 | 412 |
+| 1080p | OMT_HQ | natural | 96 | 559,463 | **440** | 389 | 376 |
+| 1080p | LQ | bars | 98 | 22,008 | **633** | 548 | 522 |
+| 1080p | SQ | bars | 98 | 22,008 | **625** | 550 | 539 |
+| 1080p | HQ | bars | 98 | 24,303 | **634** | 553 | 536 |
+| 1080p | OMT_LQ | bars | 98 | 22,008 | **632** | 553 | 540 |
+| 1080p | OMT_SQ | bars | 98 | 24,303 | **637** | 544 | 541 |
+| 1080p | OMT_HQ | bars | 98 | 24,303 | **634** | 541 | 540 |
+| 2160p | LQ | natural | 92 | 595,921 | 124 | **130** | 120 |
+| 2160p | SQ | natural | 94 | 1,088,322 | **119** | 117 | 113 |
+| 2160p | HQ | natural | 96 | 2,145,917 | **103** | 102 | 96 |
+| 2160p | OMT_LQ | natural | 92 | 595,921 | 125 | **129** | 122 |
+| 2160p | OMT_SQ | natural | 92 | 595,921 | **128** | **128** | 121 |
+| 2160p | OMT_HQ | natural | 94 | 1,192,159 | **118** | 116 | 111 |
+| 2160p | LQ | bars | 98 | 76,145 | **149** | 143 | 134 |
+| 2160p | SQ | bars | 98 | 76,145 | **147** | 144 | 134 |
+| 2160p | HQ | bars | 98 | 80,733 | **149** | 145 | 134 |
+| 2160p | OMT_LQ | bars | 98 | 76,145 | **149** | 142 | 134 |
+| 2160p | OMT_SQ | bars | 98 | 76,145 | **149** | 146 | 135 |
+| 2160p | OMT_HQ | bars | 98 | 80,733 | **150** | 142 | 135 |
 
 ### Decode, 1 thread
 
-| Resolution | Profile | Image | q | KB/frame | libvmx | vmx-codec | vmx |
+| Resolution | Profile | Image | q | bytes/frame | libvmx | vmx-codec | vmx |
 |---|---|---|---:|---:|---:|---:|---:|
-| 1080p | LQ | natural | 92 | 169 | 240 | 229 | 191 |
-| 1080p | SQ | natural | 94 | 292 | 183 | 170 | 148 |
-| 1080p | HQ | natural | 96 | 559 | 125 | 110 | 103 |
-| 1080p | OMT_LQ | natural | 92 | 169 | 240 | 229 | 191 |
-| 1080p | OMT_SQ | natural | 95 | 419 | 153 | 139 | 125 |
-| 1080p | OMT_HQ | natural | 96 | 559 | 125 | 110 | 103 |
-| 1080p | LQ | bars | 98 | 22 | 1761 | 1252 | 1326 |
-| 1080p | SQ | bars | 98 | 22 | 1764 | 1254 | 1325 |
-| 1080p | HQ | bars | 98 | 24 | 1754 | 1255 | 1324 |
-| 1080p | OMT_LQ | bars | 98 | 22 | 1756 | 1252 | 1327 |
-| 1080p | OMT_SQ | bars | 98 | 24 | 1750 | 1256 | 1324 |
-| 1080p | OMT_HQ | bars | 98 | 24 | 1758 | 1255 | 1325 |
-| 2160p | LQ | natural | 92 | 596 | 65 | 61 | 51 ✗ |
-| 2160p | SQ | natural | 94 | 1088 | 49 ✗ | 45 ✗ | 40 ✗ |
-| 2160p | HQ | natural | 96 | 2146 | 32 ✗ | 28 ✗ | 26 ✗ |
-| 2160p | OMT_LQ | natural | 92 | 596 | 65 | 62 | 51 ✗ |
-| 2160p | OMT_SQ | natural | 92 | 596 | 65 | 61 | 51 ✗ |
-| 2160p | OMT_HQ | natural | 94 | 1192 | 49 ✗ | 45 ✗ | 39 ✗ |
-| 2160p | LQ | bars | 98 | 76 | 411 | 323 | 319 |
-| 2160p | SQ | bars | 98 | 76 | 437 | 326 | 316 |
-| 2160p | HQ | bars | 98 | 81 | 430 | 324 | 322 |
-| 2160p | OMT_LQ | bars | 98 | 76 | 443 | 327 | 324 |
-| 2160p | OMT_SQ | bars | 98 | 76 | 441 | 326 | 326 |
-| 2160p | OMT_HQ | bars | 98 | 81 | 450 | 327 | 316 |
+| 1080p | LQ | natural | 92 | 168,577 | **240** | 229 | 191 |
+| 1080p | SQ | natural | 94 | 292,310 | **183** | 170 | 148 |
+| 1080p | HQ | natural | 96 | 559,463 | **125** | 110 | 103 |
+| 1080p | OMT_LQ | natural | 92 | 168,577 | **240** | 229 | 191 |
+| 1080p | OMT_SQ | natural | 95 | 418,883 | **153** | 139 | 125 |
+| 1080p | OMT_HQ | natural | 96 | 559,463 | **125** | 110 | 103 |
+| 1080p | LQ | bars | 98 | 22,008 | **1761** | 1252 | 1326 |
+| 1080p | SQ | bars | 98 | 22,008 | **1764** | 1254 | 1325 |
+| 1080p | HQ | bars | 98 | 24,303 | **1754** | 1255 | 1324 |
+| 1080p | OMT_LQ | bars | 98 | 22,008 | **1756** | 1252 | 1327 |
+| 1080p | OMT_SQ | bars | 98 | 24,303 | **1750** | 1256 | 1324 |
+| 1080p | OMT_HQ | bars | 98 | 24,303 | **1758** | 1255 | 1325 |
+| 2160p | LQ | natural | 92 | 595,921 | **65** | 61 | 51 ✗ |
+| 2160p | SQ | natural | 94 | 1,088,322 | **49** ✗ | 45 ✗ | 40 ✗ |
+| 2160p | HQ | natural | 96 | 2,145,917 | **32** ✗ | 28 ✗ | 26 ✗ |
+| 2160p | OMT_LQ | natural | 92 | 595,921 | **65** | 62 | 51 ✗ |
+| 2160p | OMT_SQ | natural | 92 | 595,921 | **65** | 61 | 51 ✗ |
+| 2160p | OMT_HQ | natural | 94 | 1,192,159 | **49** ✗ | 45 ✗ | 39 ✗ |
+| 2160p | LQ | bars | 98 | 76,145 | **411** | 323 | 319 |
+| 2160p | SQ | bars | 98 | 76,145 | **437** | 326 | 316 |
+| 2160p | HQ | bars | 98 | 80,733 | **430** | 324 | 322 |
+| 2160p | OMT_LQ | bars | 98 | 76,145 | **443** | 327 | 324 |
+| 2160p | OMT_SQ | bars | 98 | 76,145 | **441** | 326 | 326 |
+| 2160p | OMT_HQ | bars | 98 | 80,733 | **450** | 327 | 316 |
 
 ### Decode, 4 threads
 
-| Resolution | Profile | Image | q | KB/frame | libvmx | vmx-codec | vmx |
+| Resolution | Profile | Image | q | bytes/frame | libvmx | vmx-codec | vmx |
 |---|---|---|---:|---:|---:|---:|---:|
-| 1080p | LQ | natural | 92 | 169 | 912 | 686 | 701 |
-| 1080p | SQ | natural | 94 | 292 | 704 | 542 | 555 |
-| 1080p | HQ | natural | 96 | 559 | 484 | 380 | 392 |
-| 1080p | OMT_LQ | natural | 92 | 169 | 917 | 690 | 701 |
-| 1080p | OMT_SQ | natural | 95 | 419 | 592 | 463 | 471 |
-| 1080p | OMT_HQ | natural | 96 | 559 | 491 | 375 | 391 |
-| 1080p | LQ | bars | 98 | 22 | 4701 | 1819 | 3657 |
-| 1080p | SQ | bars | 98 | 22 | 5224 | 1838 | 3788 |
-| 1080p | HQ | bars | 98 | 24 | 5869 | 1848 | 3730 |
-| 1080p | OMT_LQ | bars | 98 | 22 | 5431 | 1858 | 3814 |
-| 1080p | OMT_SQ | bars | 98 | 24 | 5450 | 1820 | 3753 |
-| 1080p | OMT_HQ | bars | 98 | 24 | 5762 | 1812 | 3772 |
-| 2160p | LQ | natural | 92 | 596 | 244 | 200 | 198 |
-| 2160p | SQ | natural | 94 | 1088 | 176 | 156 | 153 |
-| 2160p | HQ | natural | 96 | 2146 | 118 | 102 | 102 |
-| 2160p | OMT_LQ | natural | 92 | 596 | 227 | 202 | 198 |
-| 2160p | OMT_SQ | natural | 92 | 596 | 222 | 201 | 196 |
-| 2160p | OMT_HQ | natural | 94 | 1192 | 176 | 154 | 151 |
-| 2160p | LQ | bars | 98 | 76 | 1132 | 575 | 1033 |
-| 2160p | SQ | bars | 98 | 76 | 1576 | 572 | 1034 |
-| 2160p | HQ | bars | 98 | 81 | 1536 | 570 | 1031 |
-| 2160p | OMT_LQ | bars | 98 | 76 | 1492 | 593 | 1026 |
-| 2160p | OMT_SQ | bars | 98 | 76 | 1393 | 585 | 1037 |
-| 2160p | OMT_HQ | bars | 98 | 81 | 1547 | 582 | 1030 |
+| 1080p | LQ | natural | 92 | 168,577 | **912** | 686 | 701 |
+| 1080p | SQ | natural | 94 | 292,310 | **704** | 542 | 555 |
+| 1080p | HQ | natural | 96 | 559,463 | **484** | 380 | 392 |
+| 1080p | OMT_LQ | natural | 92 | 168,577 | **917** | 690 | 701 |
+| 1080p | OMT_SQ | natural | 95 | 418,883 | **592** | 463 | 471 |
+| 1080p | OMT_HQ | natural | 96 | 559,463 | **491** | 375 | 391 |
+| 1080p | LQ | bars | 98 | 22,008 | **4701** | 1819 | 3657 |
+| 1080p | SQ | bars | 98 | 22,008 | **5224** | 1838 | 3788 |
+| 1080p | HQ | bars | 98 | 24,303 | **5869** | 1848 | 3730 |
+| 1080p | OMT_LQ | bars | 98 | 22,008 | **5431** | 1858 | 3814 |
+| 1080p | OMT_SQ | bars | 98 | 24,303 | **5450** | 1820 | 3753 |
+| 1080p | OMT_HQ | bars | 98 | 24,303 | **5762** | 1812 | 3772 |
+| 2160p | LQ | natural | 92 | 595,921 | **244** | 200 | 198 |
+| 2160p | SQ | natural | 94 | 1,088,322 | **176** | 156 | 153 |
+| 2160p | HQ | natural | 96 | 2,145,917 | **118** | 102 | 102 |
+| 2160p | OMT_LQ | natural | 92 | 595,921 | **227** | 202 | 198 |
+| 2160p | OMT_SQ | natural | 92 | 595,921 | **222** | 201 | 196 |
+| 2160p | OMT_HQ | natural | 94 | 1,192,159 | **176** | 154 | 151 |
+| 2160p | LQ | bars | 98 | 76,145 | **1132** | 575 | 1033 |
+| 2160p | SQ | bars | 98 | 76,145 | **1576** | 572 | 1034 |
+| 2160p | HQ | bars | 98 | 80,733 | **1536** | 570 | 1031 |
+| 2160p | OMT_LQ | bars | 98 | 76,145 | **1492** | 593 | 1026 |
+| 2160p | OMT_SQ | bars | 98 | 76,145 | **1393** | 585 | 1037 |
+| 2160p | OMT_HQ | bars | 98 | 80,733 | **1547** | 582 | 1030 |
 
 ### macos-latest (Apple M1, virtual)
 
@@ -517,119 +518,119 @@ vmx by image:
 
 ### Encode, 1 thread
 
-| Resolution | Profile | Image | q | KB/frame | libvmx | vmx-codec | vmx |
+| Resolution | Profile | Image | q | bytes/frame | libvmx | vmx-codec | vmx |
 |---|---|---|---:|---:|---:|---:|---:|
-| 1080p | LQ | natural | 92 | 169 | 149 | 147 | 120 |
-| 1080p | SQ | natural | 94 | 292 | 165 | 148 | 121 |
-| 1080p | HQ | natural | 96 | 559 | 124 | 72 | 78 |
-| 1080p | OMT_LQ | natural | 92 | 169 | 137 | 127 | 152 |
-| 1080p | OMT_SQ | natural | 95 | 419 | 137 | 133 | 103 |
-| 1080p | OMT_HQ | natural | 96 | 559 | 89 | 98 | 97 |
-| 1080p | LQ | bars | 98 | 22 | 302 | 236 | 215 |
-| 1080p | SQ | bars | 98 | 22 | 266 | 151 | 159 |
-| 1080p | HQ | bars | 98 | 24 | 184 | 205 | 184 |
-| 1080p | OMT_LQ | bars | 98 | 22 | 194 | 179 | 174 |
-| 1080p | OMT_SQ | bars | 98 | 24 | 232 | 258 | 162 |
-| 1080p | OMT_HQ | bars | 98 | 24 | 228 | 230 | 202 |
-| 2160p | LQ | natural | 92 | 596 | 38 ✗ | 42 ✗ | 45 ✗ |
-| 2160p | SQ | natural | 94 | 1088 | 36 ✗ | 25 ✗ | 36 ✗ |
-| 2160p | HQ | natural | 96 | 2146 | 30 ✗ | 34 ✗ | 23 ✗ |
-| 2160p | OMT_LQ | natural | 92 | 596 | 47 ✗ | 45 ✗ | 41 ✗ |
-| 2160p | OMT_SQ | natural | 92 | 596 | 46 ✗ | 40 ✗ | 45 ✗ |
-| 2160p | OMT_HQ | natural | 94 | 1192 | 42 ✗ | 39 ✗ | 36 ✗ |
-| 2160p | LQ | bars | 98 | 76 | 65 | 55 ✗ | 58 ✗ |
-| 2160p | SQ | bars | 98 | 76 | 66 | 52 ✗ | 55 ✗ |
-| 2160p | HQ | bars | 98 | 81 | 64 | 60 ✗ | 46 ✗ |
-| 2160p | OMT_LQ | bars | 98 | 76 | 71 | 62 | 53 ✗ |
-| 2160p | OMT_SQ | bars | 98 | 76 | 56 ✗ | 63 | 46 ✗ |
-| 2160p | OMT_HQ | bars | 98 | 81 | 72 | 66 | 53 ✗ |
+| 1080p | LQ | natural | 92 | 168,577 | **149** | 147 | 120 |
+| 1080p | SQ | natural | 94 | 292,310 | **165** | 148 | 121 |
+| 1080p | HQ | natural | 96 | 559,463 | **124** | 72 | 78 |
+| 1080p | OMT_LQ | natural | 92 | 168,577 | 137 | 127 | **152** |
+| 1080p | OMT_SQ | natural | 95 | 418,883 | **137** | 133 | 103 |
+| 1080p | OMT_HQ | natural | 96 | 559,463 | 89 | **98** | 97 |
+| 1080p | LQ | bars | 98 | 22,008 | **302** | 236 | 215 |
+| 1080p | SQ | bars | 98 | 22,008 | **266** | 151 | 159 |
+| 1080p | HQ | bars | 98 | 24,303 | 184 | **205** | 184 |
+| 1080p | OMT_LQ | bars | 98 | 22,008 | **194** | 179 | 174 |
+| 1080p | OMT_SQ | bars | 98 | 24,303 | 232 | **258** | 162 |
+| 1080p | OMT_HQ | bars | 98 | 24,303 | 228 | **230** | 202 |
+| 2160p | LQ | natural | 92 | 595,921 | 38 ✗ | 42 ✗ | **45** ✗ |
+| 2160p | SQ | natural | 94 | 1,088,322 | **36** ✗ | 25 ✗ | **36** ✗ |
+| 2160p | HQ | natural | 96 | 2,145,917 | 30 ✗ | **34** ✗ | 23 ✗ |
+| 2160p | OMT_LQ | natural | 92 | 595,921 | **47** ✗ | 45 ✗ | 41 ✗ |
+| 2160p | OMT_SQ | natural | 92 | 595,921 | **46** ✗ | 40 ✗ | 45 ✗ |
+| 2160p | OMT_HQ | natural | 94 | 1,192,159 | **42** ✗ | 39 ✗ | 36 ✗ |
+| 2160p | LQ | bars | 98 | 76,145 | **65** | 55 ✗ | 58 ✗ |
+| 2160p | SQ | bars | 98 | 76,145 | **66** | 52 ✗ | 55 ✗ |
+| 2160p | HQ | bars | 98 | 80,733 | **64** | 60 ✗ | 46 ✗ |
+| 2160p | OMT_LQ | bars | 98 | 76,145 | **71** | 62 | 53 ✗ |
+| 2160p | OMT_SQ | bars | 98 | 76,145 | 56 ✗ | **63** | 46 ✗ |
+| 2160p | OMT_HQ | bars | 98 | 80,733 | **72** | 66 | 53 ✗ |
 
 ### Encode, 3 threads
 
-| Resolution | Profile | Image | q | KB/frame | libvmx | vmx-codec | vmx |
+| Resolution | Profile | Image | q | bytes/frame | libvmx | vmx-codec | vmx |
 |---|---|---|---:|---:|---:|---:|---:|
-| 1080p | LQ | natural | 92 | 169 | 284 | 365 | 351 |
-| 1080p | SQ | natural | 94 | 292 | 427 | 192 | 255 |
-| 1080p | HQ | natural | 96 | 559 | 118 | 142 | 220 |
-| 1080p | OMT_LQ | natural | 92 | 169 | 263 | 241 | 258 |
-| 1080p | OMT_SQ | natural | 95 | 419 | 224 | 211 | 243 |
-| 1080p | OMT_HQ | natural | 96 | 559 | 222 | 268 | 198 |
-| 1080p | LQ | bars | 98 | 22 | 681 | 311 | 422 |
-| 1080p | SQ | bars | 98 | 22 | 529 | 239 | 209 |
-| 1080p | HQ | bars | 98 | 24 | 310 | 242 | 292 |
-| 1080p | OMT_LQ | bars | 98 | 22 | 351 | 268 | 319 |
-| 1080p | OMT_SQ | bars | 98 | 24 | 330 | 309 | 353 |
-| 1080p | OMT_HQ | bars | 98 | 24 | 302 | 315 | 334 |
-| 2160p | LQ | natural | 92 | 596 | 78 | 70 | 70 |
-| 2160p | SQ | natural | 94 | 1088 | 73 | 65 | 75 |
-| 2160p | HQ | natural | 96 | 2146 | 66 | 45 ✗ | 60 ✗ |
-| 2160p | OMT_LQ | natural | 92 | 596 | 86 | 68 | 82 |
-| 2160p | OMT_SQ | natural | 92 | 596 | 79 | 75 | 86 |
-| 2160p | OMT_HQ | natural | 94 | 1192 | 75 | 65 | 72 |
-| 2160p | LQ | bars | 98 | 76 | 106 | 105 | 106 |
-| 2160p | SQ | bars | 98 | 76 | 110 | 96 | 98 |
-| 2160p | HQ | bars | 98 | 81 | 115 | 129 | 103 |
-| 2160p | OMT_LQ | bars | 98 | 76 | 134 | 85 | 104 |
-| 2160p | OMT_SQ | bars | 98 | 76 | 102 | 110 | 101 |
-| 2160p | OMT_HQ | bars | 98 | 81 | 181 | 120 | 102 |
+| 1080p | LQ | natural | 92 | 168,577 | 284 | **365** | 351 |
+| 1080p | SQ | natural | 94 | 292,310 | **427** | 192 | 255 |
+| 1080p | HQ | natural | 96 | 559,463 | 118 | 142 | **220** |
+| 1080p | OMT_LQ | natural | 92 | 168,577 | **263** | 241 | 258 |
+| 1080p | OMT_SQ | natural | 95 | 418,883 | 224 | 211 | **243** |
+| 1080p | OMT_HQ | natural | 96 | 559,463 | 222 | **268** | 198 |
+| 1080p | LQ | bars | 98 | 22,008 | **681** | 311 | 422 |
+| 1080p | SQ | bars | 98 | 22,008 | **529** | 239 | 209 |
+| 1080p | HQ | bars | 98 | 24,303 | **310** | 242 | 292 |
+| 1080p | OMT_LQ | bars | 98 | 22,008 | **351** | 268 | 319 |
+| 1080p | OMT_SQ | bars | 98 | 24,303 | 330 | 309 | **353** |
+| 1080p | OMT_HQ | bars | 98 | 24,303 | 302 | 315 | **334** |
+| 2160p | LQ | natural | 92 | 595,921 | **78** | 70 | 70 |
+| 2160p | SQ | natural | 94 | 1,088,322 | 73 | 65 | **75** |
+| 2160p | HQ | natural | 96 | 2,145,917 | **66** | 45 ✗ | 60 ✗ |
+| 2160p | OMT_LQ | natural | 92 | 595,921 | **86** | 68 | 82 |
+| 2160p | OMT_SQ | natural | 92 | 595,921 | 79 | 75 | **86** |
+| 2160p | OMT_HQ | natural | 94 | 1,192,159 | **75** | 65 | 72 |
+| 2160p | LQ | bars | 98 | 76,145 | **106** | 105 | **106** |
+| 2160p | SQ | bars | 98 | 76,145 | **110** | 96 | 98 |
+| 2160p | HQ | bars | 98 | 80,733 | 115 | **129** | 103 |
+| 2160p | OMT_LQ | bars | 98 | 76,145 | **134** | 85 | 104 |
+| 2160p | OMT_SQ | bars | 98 | 76,145 | 102 | **110** | 101 |
+| 2160p | OMT_HQ | bars | 98 | 80,733 | **181** | 120 | 102 |
 
 ### Decode, 1 thread
 
-| Resolution | Profile | Image | q | KB/frame | libvmx | vmx-codec | vmx |
+| Resolution | Profile | Image | q | bytes/frame | libvmx | vmx-codec | vmx |
 |---|---|---|---:|---:|---:|---:|---:|
-| 1080p | LQ | natural | 92 | 169 | 294 | 262 | 274 |
-| 1080p | SQ | natural | 94 | 292 | 216 | 191 | 180 |
-| 1080p | HQ | natural | 96 | 559 | 121 | 69 | 116 |
-| 1080p | OMT_LQ | natural | 92 | 169 | 249 | 253 | 268 |
-| 1080p | OMT_SQ | natural | 95 | 419 | 174 | 171 | 180 |
-| 1080p | OMT_HQ | natural | 96 | 559 | 109 | 96 | 139 |
-| 1080p | LQ | bars | 98 | 22 | 2345 | 1405 | 1375 |
-| 1080p | SQ | bars | 98 | 22 | 2106 | 936 | 1083 |
-| 1080p | HQ | bars | 98 | 24 | 1600 | 1262 | 1621 |
-| 1080p | OMT_LQ | bars | 98 | 22 | 1397 | 1261 | 1556 |
-| 1080p | OMT_SQ | bars | 98 | 24 | 1837 | 1532 | 1372 |
-| 1080p | OMT_HQ | bars | 98 | 24 | 2144 | 1518 | 1695 |
-| 2160p | LQ | natural | 92 | 596 | 84 | 77 | 76 |
-| 2160p | SQ | natural | 94 | 1088 | 52 ✗ | 49 ✗ | 55 ✗ |
-| 2160p | HQ | natural | 96 | 2146 | 40 ✗ | 30 ✗ | 34 ✗ |
-| 2160p | OMT_LQ | natural | 92 | 596 | 76 | 77 | 74 |
-| 2160p | OMT_SQ | natural | 92 | 596 | 89 | 87 | 75 |
-| 2160p | OMT_HQ | natural | 94 | 1192 | 57 ✗ | 59 ✗ | 61 |
-| 2160p | LQ | bars | 98 | 76 | 383 | 312 | 330 |
-| 2160p | SQ | bars | 98 | 76 | 375 | 232 | 375 |
-| 2160p | HQ | bars | 98 | 81 | 432 | 281 | 336 |
-| 2160p | OMT_LQ | bars | 98 | 76 | 418 | 289 | 385 |
-| 2160p | OMT_SQ | bars | 98 | 76 | 382 | 260 | 322 |
-| 2160p | OMT_HQ | bars | 98 | 81 | 426 | 352 | 333 |
+| 1080p | LQ | natural | 92 | 168,577 | **294** | 262 | 274 |
+| 1080p | SQ | natural | 94 | 292,310 | **216** | 191 | 180 |
+| 1080p | HQ | natural | 96 | 559,463 | **121** | 69 | 116 |
+| 1080p | OMT_LQ | natural | 92 | 168,577 | 249 | 253 | **268** |
+| 1080p | OMT_SQ | natural | 95 | 418,883 | 174 | 171 | **180** |
+| 1080p | OMT_HQ | natural | 96 | 559,463 | 109 | 96 | **139** |
+| 1080p | LQ | bars | 98 | 22,008 | **2345** | 1405 | 1375 |
+| 1080p | SQ | bars | 98 | 22,008 | **2106** | 936 | 1083 |
+| 1080p | HQ | bars | 98 | 24,303 | 1600 | 1262 | **1621** |
+| 1080p | OMT_LQ | bars | 98 | 22,008 | 1397 | 1261 | **1556** |
+| 1080p | OMT_SQ | bars | 98 | 24,303 | **1837** | 1532 | 1372 |
+| 1080p | OMT_HQ | bars | 98 | 24,303 | **2144** | 1518 | 1695 |
+| 2160p | LQ | natural | 92 | 595,921 | **84** | 77 | 76 |
+| 2160p | SQ | natural | 94 | 1,088,322 | 52 ✗ | 49 ✗ | **55** ✗ |
+| 2160p | HQ | natural | 96 | 2,145,917 | **40** ✗ | 30 ✗ | 34 ✗ |
+| 2160p | OMT_LQ | natural | 92 | 595,921 | 76 | **77** | 74 |
+| 2160p | OMT_SQ | natural | 92 | 595,921 | **89** | 87 | 75 |
+| 2160p | OMT_HQ | natural | 94 | 1,192,159 | 57 ✗ | 59 ✗ | **61** |
+| 2160p | LQ | bars | 98 | 76,145 | **383** | 312 | 330 |
+| 2160p | SQ | bars | 98 | 76,145 | **375** | 232 | **375** |
+| 2160p | HQ | bars | 98 | 80,733 | **432** | 281 | 336 |
+| 2160p | OMT_LQ | bars | 98 | 76,145 | **418** | 289 | 385 |
+| 2160p | OMT_SQ | bars | 98 | 76,145 | **382** | 260 | 322 |
+| 2160p | OMT_HQ | bars | 98 | 80,733 | **426** | 352 | 333 |
 
 ### Decode, 3 threads
 
-| Resolution | Profile | Image | q | KB/frame | libvmx | vmx-codec | vmx |
+| Resolution | Profile | Image | q | bytes/frame | libvmx | vmx-codec | vmx |
 |---|---|---|---:|---:|---:|---:|---:|
-| 1080p | LQ | natural | 92 | 169 | 325 | 350 | 524 |
-| 1080p | SQ | natural | 94 | 292 | 547 | 270 | 368 |
-| 1080p | HQ | natural | 96 | 559 | 156 | 146 | 159 |
-| 1080p | OMT_LQ | natural | 92 | 169 | 444 | 441 | 460 |
-| 1080p | OMT_SQ | natural | 95 | 419 | 276 | 188 | 313 |
-| 1080p | OMT_HQ | natural | 96 | 559 | 249 | 324 | 270 |
-| 1080p | LQ | bars | 98 | 22 | 2630 | 1120 | 2298 |
-| 1080p | SQ | bars | 98 | 22 | 1692 | 1157 | 1673 |
-| 1080p | HQ | bars | 98 | 24 | 1936 | 1108 | 2024 |
-| 1080p | OMT_LQ | bars | 98 | 22 | 2218 | 1201 | 2132 |
-| 1080p | OMT_SQ | bars | 98 | 24 | 2134 | 1254 | 2269 |
-| 1080p | OMT_HQ | bars | 98 | 24 | 2196 | 1297 | 2459 |
-| 2160p | LQ | natural | 92 | 596 | 141 | 125 | 137 |
-| 2160p | SQ | natural | 94 | 1088 | 102 | 87 | 117 |
-| 2160p | HQ | natural | 96 | 2146 | 70 | 59 ✗ | 73 |
-| 2160p | OMT_LQ | natural | 92 | 596 | 142 | 119 | 136 |
-| 2160p | OMT_SQ | natural | 92 | 596 | 155 | 132 | 136 |
-| 2160p | OMT_HQ | natural | 94 | 1192 | 110 | 91 | 103 |
-| 2160p | LQ | bars | 98 | 76 | 523 | 341 | 507 |
-| 2160p | SQ | bars | 98 | 76 | 512 | 333 | 557 |
-| 2160p | HQ | bars | 98 | 81 | 518 | 363 | 543 |
-| 2160p | OMT_LQ | bars | 98 | 76 | 571 | 361 | 354 |
-| 2160p | OMT_SQ | bars | 98 | 76 | 598 | 354 | 628 |
-| 2160p | OMT_HQ | bars | 98 | 81 | 921 | 364 | 586 |
+| 1080p | LQ | natural | 92 | 168,577 | 325 | 350 | **524** |
+| 1080p | SQ | natural | 94 | 292,310 | **547** | 270 | 368 |
+| 1080p | HQ | natural | 96 | 559,463 | 156 | 146 | **159** |
+| 1080p | OMT_LQ | natural | 92 | 168,577 | 444 | 441 | **460** |
+| 1080p | OMT_SQ | natural | 95 | 418,883 | 276 | 188 | **313** |
+| 1080p | OMT_HQ | natural | 96 | 559,463 | 249 | **324** | 270 |
+| 1080p | LQ | bars | 98 | 22,008 | **2630** | 1120 | 2298 |
+| 1080p | SQ | bars | 98 | 22,008 | **1692** | 1157 | 1673 |
+| 1080p | HQ | bars | 98 | 24,303 | 1936 | 1108 | **2024** |
+| 1080p | OMT_LQ | bars | 98 | 22,008 | **2218** | 1201 | 2132 |
+| 1080p | OMT_SQ | bars | 98 | 24,303 | 2134 | 1254 | **2269** |
+| 1080p | OMT_HQ | bars | 98 | 24,303 | 2196 | 1297 | **2459** |
+| 2160p | LQ | natural | 92 | 595,921 | **141** | 125 | 137 |
+| 2160p | SQ | natural | 94 | 1,088,322 | 102 | 87 | **117** |
+| 2160p | HQ | natural | 96 | 2,145,917 | 70 | 59 ✗ | **73** |
+| 2160p | OMT_LQ | natural | 92 | 595,921 | **142** | 119 | 136 |
+| 2160p | OMT_SQ | natural | 92 | 595,921 | **155** | 132 | 136 |
+| 2160p | OMT_HQ | natural | 94 | 1,192,159 | **110** | 91 | 103 |
+| 2160p | LQ | bars | 98 | 76,145 | **523** | 341 | 507 |
+| 2160p | SQ | bars | 98 | 76,145 | 512 | 333 | **557** |
+| 2160p | HQ | bars | 98 | 80,733 | 518 | 363 | **543** |
+| 2160p | OMT_LQ | bars | 98 | 76,145 | **571** | 361 | 354 |
+| 2160p | OMT_SQ | bars | 98 | 76,145 | 598 | 354 | **628** |
+| 2160p | OMT_HQ | bars | 98 | 80,733 | **921** | 364 | 586 |
 
 ## Reproducing
 

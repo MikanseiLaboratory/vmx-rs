@@ -326,6 +326,8 @@ The script measures natural before bars and `OMT_LQ` before `OMT_SQ` and `OMT_HQ
 | 2160p | bars | OMT_HQ — High (80) | Encode, BGRA texture → bitstream (alpha, 4 planes) | 74.1 fps (13.497 ms) | 39.9 fps ✗ (25.084 ms) | **49.8 fps ✗ (20.076 ms)** | 1.25× | GPU (wgpu) |
 | 2160p | bars | OMT_HQ — High (80) | Encode, BGRA texture → bitstream (opaque, 3 planes) | 95.4 fps (10.485 ms) | — | 73.5 fps (13.609 ms) | 0.77× vs host pixels | — |
 
+Host↔GPU copies are limited by PCIe and memory bandwidth, and that transfer is the bottleneck in the CPU-plus-transfer column. On the 1080p natural OMT_SQ decode row, host pixels take 1.466 ms and the same decode plus `write_texture` takes 3.031 ms, so the upload is most of that column. The matching encode row is 3.540 ms on host pixels and 5.643 ms once `read_texture` is included. When the texture stays on the GPU (`decode_to_texture` feeding a later `encode_from_texture`, with no host round trip each frame), the GPU path does not pay that transfer and is the faster way to keep the frame on the device.
+
 GPU preview and GPU encode match the CPU path on all 12 image × profile cells (PSNR 100 dB, max abs 0). GPU decode matches on every `bars` cell. `natural` decode does not:
 
 | Resolution | Profile | PSNR | MAE | max abs |

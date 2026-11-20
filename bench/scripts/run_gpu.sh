@@ -12,9 +12,13 @@
 #
 # 1080p uses GPU_BENCH_ITERS (default 20). 2160p uses half of that, and at
 # least 4, matching the synthetic second pass in examples/gpu_bench.rs.
-# gpu_bench then discards GPU_BENCH_PRIME (default 20) untimed iterations of
-# each GPU path before the timed samples. Those iterations are not in the
-# CSV. The per-case warm-up inside the timed loop is also excluded. The CSV
+# gpu_bench settles q with 60 encode+save frames, the same rate-control pass
+# as bench/, and pins it with set_quality. It then discards GPU_BENCH_PRIME
+# (default 20) untimed iterations of every timed path, including host-pixel
+# and CPU-plus-transfer, before the recorded samples. Before the first
+# recorded profile at each resolution this script also runs one full pass
+# and throws the CSV away, so that process is not the cold first transfer.
+# The per-case warm-up inside the timed loop is also excluded. The CSV
 # replaces OUT.
 #
 # One image and one profile (CSV on stdout, notes on stderr):
@@ -67,14 +71,29 @@ if ((half < 4)); then
   half=4
 fi
 
-echo "res,image,profile,case,ms_median,fps_median,ms_samples" >"$OUT"
+echo "res,image,profile,q,case,ms_median,fps_median,ms_samples" >"$OUT"
 
 profiles=(OMT_LQ OMT_SQ OMT_HQ)
+discarded_res=""
 for image in "${images[@]}"; do
   base=$(basename "$image")
   iters=$ITERS
+  res=1080p
   if [[ "$base" == 2160p-* ]]; then
     iters=$half
+    res=2160p
+  fi
+  if [[ "$res" != "$discarded_res" ]]; then
+    echo "discarding one unrecorded pass at $res ($base OMT_LQ, iters=$iters)" >&2
+    cargo run --release --example gpu_bench --features wgpu --locked -- \
+      --image "$image" \
+      --profile OMT_LQ \
+      --iters "$iters" \
+      --prime "$PRIME" \
+      --require-gpu \
+      --no-header \
+      >/dev/null
+    discarded_res=$res
   fi
   for profile in "${profiles[@]}"; do
     echo "measuring $base $profile iters=$iters" >&2

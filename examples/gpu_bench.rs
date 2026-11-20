@@ -1,9 +1,9 @@
 //! Compare GPU texture decode/encode with the CPU work that replaces each GPU path.
 //!
 //! The timed loops are unchanged. A UYVY frame is converted to BGRA on the CPU
-//! before those loops; that conversion is not included in the samples. Each
-//! GPU path is also run untimed (`--prime`, default 20) before its timed
-//! samples, so the first profile at a resolution is not the cold transfer.
+//! before those loops; that conversion is not included in the samples. q is
+//! the quality after 60 encode+save frames, then pinned. `--prime` (default
+//! 20) runs every timed path untimed before the samples.
 //!
 //! Usage:
 //!   cargo run --release --example gpu_bench --features wgpu
@@ -17,11 +17,15 @@
 //! `1080p-natural`, `2160p-bars`, with or without `.uyvy.gz`). `natural` and
 //! `bars` need `--res 1080` or `--res 2160`. Omit `--image` for the synthetic
 //! gradient. `--profile` is `OMT_LQ`, `OMT_SQ`, `OMT_HQ`, or `all` (default
-//! `OMT_SQ`). `--prime N` (default 20) is the untimed GPU-path iterations
-//! before the timed samples; `--prime 0` skips them.
+//! `OMT_SQ`). q follows the `bench/` rate-control pass: 60 encode+save
+//! frames on the original UYVY (or on the BGRA gradient when there is no
+//! UYVY), then `set_quality` pins that q for every timed encode. `--prime N`
+//! (default 20) repeats every timed path, including the host-pixel and
+//! CPU-plus-transfer paths, and those iterations are not recorded.
+//! `--prime 0` skips them.
 //!
 //! CSV on stdout:
-//!   res,image,profile,case,ms_median,fps_median,ms_samples
+//!   res,image,profile,q,case,ms_median,fps_median,ms_samples
 //! `image` is the file name, or `synthetic`. Quality lines and the adapter
 //! name go to stderr. `--require-gpu` exits if the adapter is llvmpipe,
 //! lavapipe, SwiftShader, or a CPU device. `--probe` prints the adapter and
@@ -99,6 +103,7 @@ fn quality_report(
     queue: &wgpu::Queue,
     frame: &Frame,
     profile: Profile,
+    q: i32,
     encoded: &[u8],
     src_tex: &wgpu::Texture,
 ) {
@@ -155,6 +160,7 @@ fn quality_report(
         color_space: Default::default(),
     })
     .expect("cpu enc");
+    cpu_enc.set_quality(q);
     cpu_enc.encode_bgra(src_bgra, stride).expect("cpu encode");
     let mut cpu_bs = vec![0u8; 16 << 20];
     let cpu_len = cpu_enc.save_to(&mut cpu_bs).expect("save cpu");
@@ -172,6 +178,7 @@ fn quality_report(
         color_space: Default::default(),
     })
     .expect("gpu enc");
+    gpu_enc.set_quality(q);
     gpu_enc
         .encode_from_texture(device, queue, src_tex)
         .expect("gpu encode");
@@ -195,6 +202,47 @@ struct Frame {
     width: i32,
     height: i32,
     bgra: Vec<u8>,
+    /// Present for files under `bench/images/`. Rate control runs on this
+    /// UYVY, matching `bench/`. Synthetic frames leave it empty and settle
+    /// on `bgra` instead.
+    uyvy: Option<Vec<u8>>,
+}
+
+/// Frames of encode+save before q is pinned. `bench/src/main.rs` uses the
+/// same count on libvmx, then `set_quality` on every timed encode.
+const RATE_CONTROL_FRAMES: usize = 60;
+
+fn settle_quality(frame: &Frame, profile: Profile) -> i32 {
+    let mut codec = Codec::new(Config {
+        width: frame.width,
+        height: frame.height,
+        profile,
+        color_space: Default::default(),
+    })
+    .expect("settle");
+    let threads = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(1);
+    codec.set_threads(threads);
+    let mut packet = vec![0u8; 64 << 20];
+    let uyvy_stride = frame.width as usize * 2;
+    let bgra_stride = frame.width as usize * 4;
+    for _ in 0..RATE_CONTROL_FRAMES {
+        if let Some(uyvy) = &frame.uyvy {
+            codec.encode_uyvy(uyvy, uyvy_stride).expect("settle uyvy");
+        } else {
+            codec
+                .encode_bgra(&frame.bgra, bgra_stride)
+                .expect("settle bgra");
+        }
+        codec.save_to(&mut packet).expect("settle save");
+    }
+    let q = codec.quality();
+    let source = if frame.uyvy.is_some() { "UYVY" } else { "BGRA" };
+    eprintln!(
+        "q={q} settled after {RATE_CONTROL_FRAMES} {source} encode+save frames on {threads} threads, then pinned with set_quality"
+    );
+    q
 }
 
 fn res_label(width: i32, height: i32) -> String {
@@ -213,7 +261,14 @@ fn csv_field(s: &str) -> String {
     }
 }
 
-fn emit_case(out: &mut dyn Write, frame: &Frame, profile: &str, label: &str, samples: &[f64]) {
+fn emit_case(
+    out: &mut dyn Write,
+    frame: &Frame,
+    profile: &str,
+    q: i32,
+    label: &str,
+    samples: &[f64],
+) {
     let med = median_ms(samples);
     let avg = samples.iter().sum::<f64>() / samples.len() as f64;
     let fps = 1000.0 / med.max(1e-9);
@@ -228,7 +283,7 @@ fn emit_case(out: &mut dyn Write, frame: &Frame, profile: &str, label: &str, sam
         .join(";");
     writeln!(
         out,
-        "{},{},{},{},{med:.3},{fps:.1},{samples_field}",
+        "{},{},{},{q},{},{med:.3},{fps:.1},{samples_field}",
         res_label(frame.width, frame.height),
         csv_field(&frame.image),
         profile,
@@ -277,6 +332,7 @@ fn bench_resolution(
     let height = frame.height;
     let bgra = &frame.bgra;
     let stride = (width as usize) * 4;
+    let q = settle_quality(frame, profile);
 
     let mut enc = Codec::new(Config {
         width,
@@ -285,9 +341,11 @@ fn bench_resolution(
         color_space: Default::default(),
     })
     .expect("codec");
+    enc.set_quality(q);
     enc.encode_bgra(bgra, stride).expect("encode");
     let mut bitstream = vec![0u8; 16 << 20];
     let len = enc.save_to(&mut bitstream).expect("save");
+    enc.set_quality(q);
     let encoded = bitstream[..len].to_vec();
 
     let mut cpu_dec = Codec::new(Config::new(width, height)).expect("cpu");
@@ -326,7 +384,7 @@ fn bench_resolution(
         caps.neon
     );
 
-    quality_report(device, queue, frame, profile, &encoded, &src_tex);
+    quality_report(device, queue, frame, profile, q, &encoded, &src_tex);
 
     let mut gpu_enc = Codec::new(Config {
         width,
@@ -335,9 +393,17 @@ fn bench_resolution(
         color_space: Default::default(),
     })
     .expect("gpu enc");
+    gpu_enc.set_quality(q);
 
     if prime > 0 {
-        eprintln!("priming {prime} untimed iters of each GPU path (not in the median)");
+        eprintln!(
+            "priming {prime} untimed iters of every timed path, including CPU-plus-transfer (not in the median)"
+        );
+        discard_iters(prime, || {
+            cpu_dec
+                .decode_bgra(&mut cpu_out, stride)
+                .expect("prime cpu decode");
+        });
         discard_iters(prime, || {
             cpu_dec
                 .decode_bgra(&mut cpu_out, stride)
@@ -351,6 +417,11 @@ fn bench_resolution(
                 .decode_to_texture(device, queue)
                 .expect("prime gpu decode");
             wait_idle(device);
+        });
+        discard_iters(prime, || {
+            cpu_dec
+                .decode_preview_bgra(&mut cpu_preview, pstride)
+                .expect("prime cpu preview");
         });
         discard_iters(prime, || {
             cpu_dec
@@ -375,17 +446,28 @@ fn bench_resolution(
             let pixels =
                 gpu::read_texture_bgra(device, queue, &src_tex, width as u32, height as u32)
                     .expect("prime readback");
+            enc.set_quality(q);
             enc.encode_bgra(&pixels, stride).expect("prime cpu encode");
         });
         discard_iters(prime, || {
+            enc.set_quality(q);
+            enc.encode_bgra(bgra, stride).expect("prime host encode");
+        });
+        discard_iters(prime, || {
+            gpu_enc.set_quality(q);
             gpu_enc
                 .encode_from_texture(device, queue, &src_tex)
                 .expect("prime gpu encode");
         });
         discard_iters(prime, || {
+            gpu_enc.set_quality(q);
             gpu_enc
                 .encode_from_texture_opaque(device, queue, &src_tex)
                 .expect("prime gpu opaque");
+        });
+        discard_iters(prime, || {
+            enc.set_quality(q);
+            enc.encode_bgrx(bgra, stride).expect("prime bgrx");
         });
     }
 
@@ -396,6 +478,7 @@ fn bench_resolution(
         out,
         frame,
         profile_name,
+        q,
         "CPU decode_bgra (pixels only)",
         &timed_iters(warmup, iters, || {
             cpu_dec
@@ -407,6 +490,7 @@ fn bench_resolution(
         out,
         frame,
         profile_name,
+        q,
         "CPU equivalent of GPU decode (decode_bgra + write_texture)",
         &timed_iters(warmup, iters, || {
             cpu_dec
@@ -421,6 +505,7 @@ fn bench_resolution(
         out,
         frame,
         profile_name,
+        q,
         "GPU decode_to_texture",
         &timed_iters(warmup, iters, || {
             let _frame = gpu_dec
@@ -435,6 +520,7 @@ fn bench_resolution(
         out,
         frame,
         profile_name,
+        q,
         "CPU decode_preview_bgra (pixels only)",
         &timed_iters(warmup, iters, || {
             cpu_dec
@@ -446,6 +532,7 @@ fn bench_resolution(
         out,
         frame,
         profile_name,
+        q,
         "CPU equivalent of GPU preview (preview_bgra + write_texture)",
         &timed_iters(warmup, iters, || {
             cpu_dec
@@ -465,6 +552,7 @@ fn bench_resolution(
         out,
         frame,
         profile_name,
+        q,
         "GPU decode_preview_to_texture",
         &timed_iters(warmup, iters, || {
             let _frame = gpu_dec
@@ -479,8 +567,10 @@ fn bench_resolution(
         out,
         frame,
         profile_name,
+        q,
         "CPU encode_bgra (host pixels)",
         &timed_iters(warmup, iters, || {
+            enc.set_quality(q);
             enc.encode_bgra(bgra, stride).expect("cpu encode");
         }),
     );
@@ -488,16 +578,19 @@ fn bench_resolution(
         out,
         frame,
         profile_name,
+        q,
         "CPU equivalent of GPU encode (read_texture + encode_bgra)",
         &timed_iters(warmup, iters, || {
             let pixels =
                 gpu::read_texture_bgra(device, queue, &src_tex, width as u32, height as u32)
                     .expect("readback");
+            enc.set_quality(q);
             enc.encode_bgra(&pixels, stride).expect("cpu encode");
         }),
     );
 
     if prime == 0 {
+        gpu_enc.set_quality(q);
         gpu_enc
             .encode_from_texture(device, queue, &src_tex)
             .expect("gpu encode warmup");
@@ -507,8 +600,10 @@ fn bench_resolution(
         out,
         frame,
         profile_name,
+        q,
         "GPU encode_from_texture (4-plane / alpha)",
         &timed_iters(warmup, iters, || {
+            gpu_enc.set_quality(q);
             gpu_enc
                 .encode_from_texture(device, queue, &src_tex)
                 .expect("gpu encode");
@@ -518,8 +613,10 @@ fn bench_resolution(
         out,
         frame,
         profile_name,
+        q,
         "GPU encode_from_texture_opaque (3-plane)",
         &timed_iters(warmup, iters, || {
+            gpu_enc.set_quality(q);
             gpu_enc
                 .encode_from_texture_opaque(device, queue, &src_tex)
                 .expect("gpu opaque");
@@ -542,8 +639,10 @@ fn bench_resolution(
         out,
         frame,
         profile_name,
+        q,
         "CPU encode_bgrx (3-plane)",
         &timed_iters(warmup, iters, || {
+            enc.set_quality(q);
             enc.encode_bgrx(bgra, stride).expect("cpu bgrx");
         }),
     );
@@ -566,6 +665,7 @@ fn synthetic_bgra(width: i32, height: i32) -> Frame {
         width,
         height,
         bgra,
+        uyvy: None,
     }
 }
 
@@ -697,6 +797,7 @@ fn load_uyvy_frame(
         width,
         height,
         bgra,
+        uyvy: Some(uyvy),
     }
 }
 
@@ -899,7 +1000,7 @@ fn main() {
     if args.header {
         writeln!(
             out,
-            "res,image,profile,case,ms_median,fps_median,ms_samples"
+            "res,image,profile,q,case,ms_median,fps_median,ms_samples"
         )
         .expect("write csv header");
     }

@@ -38,6 +38,7 @@ Pure Rust [VMX1](https://github.com/openmediatransport/libvmx) video codec.
 | Preview | DC 1/8 | DC 1/8 + planar pack |
 | Slice parallelism | `ThreadTasks` | rayon |
 | ARM64 | sse2neon | Native NEON |
+| ARMv7 (A32) | — | Native NEON behind the `arm32-neon` feature (nightly) |
 
 ### Instruction-family checklist
 
@@ -69,6 +70,21 @@ The crates.io package is [`vmx`](https://crates.io/crates/vmx).
 ```toml
 vmx = "0.2"
 ```
+
+AArch32 (armv7) NEON kernels are opt-in and require a nightly toolchain, because
+the A32 intrinsics are still unstable (rust-lang/rust#111800):
+
+```toml
+vmx = { version = "0.2.2", features = ["arm32-neon"] }
+```
+
+```sh
+cargo +nightly build --target armv7-unknown-linux-gnueabi --features arm32-neon
+```
+
+On a soft-float target LLVM cannot always codegen these kernels; compiling only
+this crate with `-C target-feature=-soft-float,+neon` is known to work (see the
+`lg-webos-tv-omt-monitor` project).
 
 ## Usage
 

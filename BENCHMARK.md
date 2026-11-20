@@ -327,13 +327,309 @@ Short tables: libvmx AVX2 / vmx-codec / vmx. Full tables, including libvmx's 128
 
 ## ARM / NEON
 
-The x86-64 host above does not run NEON. [`.github/workflows/bench.yml`](.github/workflows/bench.yml) runs the same harness on `ubuntu-24.04-arm` and `macos-latest`. Trigger it with `workflow_dispatch`. The branch that adds the workflow also runs it once on push, because GitHub only lists a new workflow for manual dispatch after the file is on the default branch.
+Same harness and the same pictures as the x86-64 run. The settled `q` and the frame size matched that run on all 24 picture/profile pairs. Each host is one pass, from [workflow run 44675775781](https://github.com/MikanseiLaboratory/vmx-rs/actions/runs/44675775781) at commit `1eea3ed`. rustc 1.100.0.
 
-On aarch64 the harness builds libvmx the way `build/buildlinuxarm64.sh` does (`vmxcodec_arm.cpp`, NEON through sse2neon, no `-mavx2`). That translation unit does not compile the 256-bit functions, so there is one libvmx column rather than an AVX2 column and a 128-bit column. vmx-codec uses its compile-time NEON code. vmx reports its runtime path, which on AArch64 is NEON.
+libvmx is the official ARM build (`vmxcodec_arm.cpp`, NEON through sse2neon, no `-mavx2`). That build does not compile the 256-bit path, so there is one libvmx column. vmx-codec reports `NEON (compile-time)`. vmx reports `dct=Neon` and `color=Neon`. On both hosts, all 288 rows matched libvmx byte for byte on encode and pixel for pixel on decode. 10-bit P216 / PA16 was not measured: the harness again got `invalid parameters` from `encode_p216`, `decode_p216`, `encode_pa16`, and `decode_pa16`.
 
-10-bit P216 / PA16 stays unmeasured on these hosts for the same reason as on x86-64: `vmx` 0.2.1 returns `invalid parameters` for those four entry points.
+`✗` means the median is below 60 fps, using the unrounded median (a value that rounds to 60 can still be under 60). `KB/frame` is `bytes / 1000`, rounded. Min and max of the seven runs are in the CSV files linked below.
 
-Runner results are not in this revision yet. The workflow uploads `results.csv`, `cpuinfo.txt`, and `host.txt` as artifacts. This section will be replaced with those medians and the runner's CPU description when a run finishes. If a runner cannot complete the job, the failure is recorded here instead of a table.
+The ratio tables are `median / libvmx` on that host. libvmx here is the sse2neon path, not the AVX2 path in the x86-64 tables. The geometric mean is over the 24 rows of that operation and thread count. The range is the smallest and largest ratio.
+
+### ubuntu-24.04-arm (Neoverse-N2)
+
+- CPU: ARM Neoverse-N2, implementer `0x41`, part `0xd49`, revision 0, 4 vCPU, no SMT. `lscpu` reports NEON (`asimd`) and SVE.
+- OS: Ubuntu 24.04, kernel 7.0.0-1017-azure
+- Compiler: clang++ 18.1.3, flags `-O3 -std=c++17 -fdeclspec -fPIC -pthread`
+- Threads: 1 and 4
+- Raw rows: [`bench/results/linux-arm64.csv`](bench/results/linux-arm64.csv)
+
+1080p: every median is above 60 fps. The lowest is vmx, OMT_HQ, natural, encode, 1 thread, at 98 fps.
+
+2160p, 4 threads: every median is above 60 fps. The lowest is vmx, HQ, natural, encode, at 96 fps.
+
+2160p, 1 thread: encode is below 60 fps for all three implementations, on every profile and both images (25–42 fps). Natural decode is below 60 fps for all three on HQ, SQ, and OMT_HQ. On natural LQ, OMT_LQ, and OMT_SQ, only vmx is below 60 fps (51 fps). Colour-bar decodes are above 60 fps.
+
+| Operation | Threads | vmx / libvmx | vmx-codec / libvmx |
+|---|---:|---:|---:|
+| Encode | 1 | 0.86 (0.85–0.89) | 1.04 (1.01–1.06) |
+| Encode | 4 | 0.89 (0.83–0.97) | 0.93 (0.85–1.05) |
+| Decode | 1 | 0.78 (0.70–0.83) | 0.82 (0.71–0.96) |
+| Decode | 4 | 0.76 (0.64–0.91) | 0.55 (0.31–0.91) |
+
+vmx by image:
+
+| Operation | Threads | natural | bars |
+|---|---:|---:|---:|
+| Encode | 1 | 0.87 (0.86–0.89) | 0.85 (0.85–0.86) |
+| Encode | 4 | 0.91 (0.85–0.97) | 0.87 (0.83–0.92) |
+| Decode | 1 | 0.81 (0.79–0.83) | 0.75 (0.70–0.78) |
+| Decode | 4 | 0.82 (0.76–0.89) | 0.71 (0.64–0.91) |
+
+The 1-thread encode ratios sit within a few percent of each other across all 24 rows. This is a single pass on a shared runner, so a gap of that size is not a settled ordering. The decode ratios, and vmx-codec's 4-thread decode mean of 0.55, are wider. The low end of that decode range is colour bars.
+
+### Encode, 1 thread
+
+| Resolution | Profile | Image | q | KB/frame | libvmx | vmx-codec | vmx |
+|---|---|---|---:|---:|---:|---:|---:|
+| 1080p | LQ | natural | 92 | 169 | 139 | 148 | 123 |
+| 1080p | SQ | natural | 94 | 292 | 130 | 135 | 114 |
+| 1080p | HQ | natural | 96 | 559 | 113 | 115 | 98 |
+| 1080p | OMT_LQ | natural | 92 | 169 | 140 | 147 | 123 |
+| 1080p | OMT_SQ | natural | 95 | 419 | 122 | 127 | 107 |
+| 1080p | OMT_HQ | natural | 96 | 559 | 113 | 115 | 98 |
+| 1080p | LQ | bars | 98 | 22 | 162 | 169 | 138 |
+| 1080p | SQ | bars | 98 | 22 | 162 | 170 | 139 |
+| 1080p | HQ | bars | 98 | 24 | 162 | 170 | 139 |
+| 1080p | OMT_LQ | bars | 98 | 22 | 162 | 171 | 139 |
+| 1080p | OMT_SQ | bars | 98 | 24 | 162 | 171 | 138 |
+| 1080p | OMT_HQ | bars | 98 | 24 | 162 | 171 | 137 |
+| 2160p | LQ | natural | 92 | 596 | 35 ✗ | 37 ✗ | 31 ✗ |
+| 2160p | SQ | natural | 94 | 1088 | 33 ✗ | 34 ✗ | 29 ✗ |
+| 2160p | HQ | natural | 96 | 2146 | 29 ✗ | 29 ✗ | 25 ✗ |
+| 2160p | OMT_LQ | natural | 92 | 596 | 35 ✗ | 37 ✗ | 31 ✗ |
+| 2160p | OMT_SQ | natural | 92 | 596 | 35 ✗ | 37 ✗ | 31 ✗ |
+| 2160p | OMT_HQ | natural | 94 | 1192 | 33 ✗ | 34 ✗ | 28 ✗ |
+| 2160p | LQ | bars | 98 | 76 | 40 ✗ | 42 ✗ | 34 ✗ |
+| 2160p | SQ | bars | 98 | 76 | 40 ✗ | 42 ✗ | 34 ✗ |
+| 2160p | HQ | bars | 98 | 81 | 40 ✗ | 42 ✗ | 35 ✗ |
+| 2160p | OMT_LQ | bars | 98 | 76 | 40 ✗ | 42 ✗ | 35 ✗ |
+| 2160p | OMT_SQ | bars | 98 | 76 | 40 ✗ | 42 ✗ | 35 ✗ |
+| 2160p | OMT_HQ | bars | 98 | 81 | 40 ✗ | 42 ✗ | 35 ✗ |
+
+### Encode, 4 threads
+
+| Resolution | Profile | Image | q | KB/frame | libvmx | vmx-codec | vmx |
+|---|---|---|---:|---:|---:|---:|---:|
+| 1080p | LQ | natural | 92 | 169 | 536 | 488 | 476 |
+| 1080p | SQ | natural | 94 | 292 | 514 | 457 | 443 |
+| 1080p | HQ | natural | 96 | 559 | 443 | 394 | 378 |
+| 1080p | OMT_LQ | natural | 92 | 169 | 551 | 486 | 475 |
+| 1080p | OMT_SQ | natural | 95 | 419 | 483 | 421 | 412 |
+| 1080p | OMT_HQ | natural | 96 | 559 | 440 | 389 | 376 |
+| 1080p | LQ | bars | 98 | 22 | 633 | 548 | 522 |
+| 1080p | SQ | bars | 98 | 22 | 625 | 550 | 539 |
+| 1080p | HQ | bars | 98 | 24 | 634 | 553 | 536 |
+| 1080p | OMT_LQ | bars | 98 | 22 | 632 | 553 | 540 |
+| 1080p | OMT_SQ | bars | 98 | 24 | 637 | 544 | 541 |
+| 1080p | OMT_HQ | bars | 98 | 24 | 634 | 541 | 540 |
+| 2160p | LQ | natural | 92 | 596 | 124 | 130 | 120 |
+| 2160p | SQ | natural | 94 | 1088 | 119 | 117 | 113 |
+| 2160p | HQ | natural | 96 | 2146 | 103 | 102 | 96 |
+| 2160p | OMT_LQ | natural | 92 | 596 | 125 | 129 | 122 |
+| 2160p | OMT_SQ | natural | 92 | 596 | 128 | 128 | 121 |
+| 2160p | OMT_HQ | natural | 94 | 1192 | 118 | 116 | 111 |
+| 2160p | LQ | bars | 98 | 76 | 149 | 143 | 134 |
+| 2160p | SQ | bars | 98 | 76 | 147 | 144 | 134 |
+| 2160p | HQ | bars | 98 | 81 | 149 | 145 | 134 |
+| 2160p | OMT_LQ | bars | 98 | 76 | 149 | 142 | 134 |
+| 2160p | OMT_SQ | bars | 98 | 76 | 149 | 146 | 135 |
+| 2160p | OMT_HQ | bars | 98 | 81 | 150 | 142 | 135 |
+
+### Decode, 1 thread
+
+| Resolution | Profile | Image | q | KB/frame | libvmx | vmx-codec | vmx |
+|---|---|---|---:|---:|---:|---:|---:|
+| 1080p | LQ | natural | 92 | 169 | 240 | 229 | 191 |
+| 1080p | SQ | natural | 94 | 292 | 183 | 170 | 148 |
+| 1080p | HQ | natural | 96 | 559 | 125 | 110 | 103 |
+| 1080p | OMT_LQ | natural | 92 | 169 | 240 | 229 | 191 |
+| 1080p | OMT_SQ | natural | 95 | 419 | 153 | 139 | 125 |
+| 1080p | OMT_HQ | natural | 96 | 559 | 125 | 110 | 103 |
+| 1080p | LQ | bars | 98 | 22 | 1761 | 1252 | 1326 |
+| 1080p | SQ | bars | 98 | 22 | 1764 | 1254 | 1325 |
+| 1080p | HQ | bars | 98 | 24 | 1754 | 1255 | 1324 |
+| 1080p | OMT_LQ | bars | 98 | 22 | 1756 | 1252 | 1327 |
+| 1080p | OMT_SQ | bars | 98 | 24 | 1750 | 1256 | 1324 |
+| 1080p | OMT_HQ | bars | 98 | 24 | 1758 | 1255 | 1325 |
+| 2160p | LQ | natural | 92 | 596 | 65 | 61 | 51 ✗ |
+| 2160p | SQ | natural | 94 | 1088 | 49 ✗ | 45 ✗ | 40 ✗ |
+| 2160p | HQ | natural | 96 | 2146 | 32 ✗ | 28 ✗ | 26 ✗ |
+| 2160p | OMT_LQ | natural | 92 | 596 | 65 | 62 | 51 ✗ |
+| 2160p | OMT_SQ | natural | 92 | 596 | 65 | 61 | 51 ✗ |
+| 2160p | OMT_HQ | natural | 94 | 1192 | 49 ✗ | 45 ✗ | 39 ✗ |
+| 2160p | LQ | bars | 98 | 76 | 411 | 323 | 319 |
+| 2160p | SQ | bars | 98 | 76 | 437 | 326 | 316 |
+| 2160p | HQ | bars | 98 | 81 | 430 | 324 | 322 |
+| 2160p | OMT_LQ | bars | 98 | 76 | 443 | 327 | 324 |
+| 2160p | OMT_SQ | bars | 98 | 76 | 441 | 326 | 326 |
+| 2160p | OMT_HQ | bars | 98 | 81 | 450 | 327 | 316 |
+
+### Decode, 4 threads
+
+| Resolution | Profile | Image | q | KB/frame | libvmx | vmx-codec | vmx |
+|---|---|---|---:|---:|---:|---:|---:|
+| 1080p | LQ | natural | 92 | 169 | 912 | 686 | 701 |
+| 1080p | SQ | natural | 94 | 292 | 704 | 542 | 555 |
+| 1080p | HQ | natural | 96 | 559 | 484 | 380 | 392 |
+| 1080p | OMT_LQ | natural | 92 | 169 | 917 | 690 | 701 |
+| 1080p | OMT_SQ | natural | 95 | 419 | 592 | 463 | 471 |
+| 1080p | OMT_HQ | natural | 96 | 559 | 491 | 375 | 391 |
+| 1080p | LQ | bars | 98 | 22 | 4701 | 1819 | 3657 |
+| 1080p | SQ | bars | 98 | 22 | 5224 | 1838 | 3788 |
+| 1080p | HQ | bars | 98 | 24 | 5869 | 1848 | 3730 |
+| 1080p | OMT_LQ | bars | 98 | 22 | 5431 | 1858 | 3814 |
+| 1080p | OMT_SQ | bars | 98 | 24 | 5450 | 1820 | 3753 |
+| 1080p | OMT_HQ | bars | 98 | 24 | 5762 | 1812 | 3772 |
+| 2160p | LQ | natural | 92 | 596 | 244 | 200 | 198 |
+| 2160p | SQ | natural | 94 | 1088 | 176 | 156 | 153 |
+| 2160p | HQ | natural | 96 | 2146 | 118 | 102 | 102 |
+| 2160p | OMT_LQ | natural | 92 | 596 | 227 | 202 | 198 |
+| 2160p | OMT_SQ | natural | 92 | 596 | 222 | 201 | 196 |
+| 2160p | OMT_HQ | natural | 94 | 1192 | 176 | 154 | 151 |
+| 2160p | LQ | bars | 98 | 76 | 1132 | 575 | 1033 |
+| 2160p | SQ | bars | 98 | 76 | 1576 | 572 | 1034 |
+| 2160p | HQ | bars | 98 | 81 | 1536 | 570 | 1031 |
+| 2160p | OMT_LQ | bars | 98 | 76 | 1492 | 593 | 1026 |
+| 2160p | OMT_SQ | bars | 98 | 76 | 1393 | 585 | 1037 |
+| 2160p | OMT_HQ | bars | 98 | 81 | 1547 | 582 | 1030 |
+
+### macos-latest (Apple M1, virtual)
+
+- CPU: Apple M1 (Virtual), 3 vCPU. `hw.optional.neon` is 1.
+- OS: macOS 26.7.2, kernel 25.6.0 (`RELEASE_ARM64_VMAPPLE`)
+- Compiler: Apple clang 21.0.0, flags `-O3 -std=c++17 -fdeclspec -fPIC`
+- Threads: 1 and 3
+- Raw rows: [`bench/results/macos-arm64.csv`](bench/results/macos-arm64.csv)
+
+1080p: every median is above 60 fps. The lowest is vmx-codec, HQ, natural, decode, 1 thread, at 69 fps.
+
+2160p, 3 threads: the medians below 60 fps are HQ natural encode (vmx-codec 45, vmx 60 from an unrounded 59.8) and HQ natural decode (vmx-codec 59). The other 3-thread rows are above 60 fps. The lowest libvmx median at 3 threads is HQ natural encode, 66 fps.
+
+2160p, 1 thread: natural encode is below 60 fps for all three implementations on every profile. Natural decode is below 60 fps for HQ and SQ (all three) and for OMT_HQ (libvmx and vmx-codec). Colour-bar encode is mixed; the `✗` marks in the table are the cells under 60 fps. Colour-bar decode at 1 thread is above 60 fps.
+
+The seven-run spread on this virtual machine is wide on some rows. Two examples for vmx at 3 threads: 1080p HQ natural decode, median 159 fps, min 124, max 276; 1080p SQ natural encode, median 255 fps, min 106, max 272. The geometric means below, and especially the 3-thread encode range of 0.40–1.86 for vmx / libvmx, describe that sample. They are not a stable ordering. The Neoverse-N2 ratios above sit in a narrower band.
+
+| Operation | Threads | vmx / libvmx | vmx-codec / libvmx |
+|---|---:|---:|---:|
+| Encode | 1 | 0.83 (0.60–1.18) | 0.91 (0.57–1.14) |
+| Encode | 3 | 0.91 (0.40–1.86) | 0.83 (0.45–1.28) |
+| Decode | 1 | 0.89 (0.51–1.27) | 0.79 (0.44–1.04) |
+| Decode | 3 | 0.98 (0.62–1.61) | 0.71 (0.40–1.30) |
+
+vmx by image:
+
+| Operation | Threads | natural | bars |
+|---|---:|---:|---:|
+| Encode | 1 | 0.88 (0.63–1.18) | 0.79 (0.60–1.00) |
+| Encode | 3 | 1.01 (0.60–1.86) | 0.81 (0.40–1.11) |
+| Decode | 1 | 0.98 (0.83–1.27) | 0.81 (0.51–1.11) |
+| Decode | 3 | 1.02 (0.67–1.61) | 0.94 (0.62–1.12) |
+
+### Encode, 1 thread
+
+| Resolution | Profile | Image | q | KB/frame | libvmx | vmx-codec | vmx |
+|---|---|---|---:|---:|---:|---:|---:|
+| 1080p | LQ | natural | 92 | 169 | 149 | 147 | 120 |
+| 1080p | SQ | natural | 94 | 292 | 165 | 148 | 121 |
+| 1080p | HQ | natural | 96 | 559 | 124 | 72 | 78 |
+| 1080p | OMT_LQ | natural | 92 | 169 | 137 | 127 | 152 |
+| 1080p | OMT_SQ | natural | 95 | 419 | 137 | 133 | 103 |
+| 1080p | OMT_HQ | natural | 96 | 559 | 89 | 98 | 97 |
+| 1080p | LQ | bars | 98 | 22 | 302 | 236 | 215 |
+| 1080p | SQ | bars | 98 | 22 | 266 | 151 | 159 |
+| 1080p | HQ | bars | 98 | 24 | 184 | 205 | 184 |
+| 1080p | OMT_LQ | bars | 98 | 22 | 194 | 179 | 174 |
+| 1080p | OMT_SQ | bars | 98 | 24 | 232 | 258 | 162 |
+| 1080p | OMT_HQ | bars | 98 | 24 | 228 | 230 | 202 |
+| 2160p | LQ | natural | 92 | 596 | 38 ✗ | 42 ✗ | 45 ✗ |
+| 2160p | SQ | natural | 94 | 1088 | 36 ✗ | 25 ✗ | 36 ✗ |
+| 2160p | HQ | natural | 96 | 2146 | 30 ✗ | 34 ✗ | 23 ✗ |
+| 2160p | OMT_LQ | natural | 92 | 596 | 47 ✗ | 45 ✗ | 41 ✗ |
+| 2160p | OMT_SQ | natural | 92 | 596 | 46 ✗ | 40 ✗ | 45 ✗ |
+| 2160p | OMT_HQ | natural | 94 | 1192 | 42 ✗ | 39 ✗ | 36 ✗ |
+| 2160p | LQ | bars | 98 | 76 | 65 | 55 ✗ | 58 ✗ |
+| 2160p | SQ | bars | 98 | 76 | 66 | 52 ✗ | 55 ✗ |
+| 2160p | HQ | bars | 98 | 81 | 64 | 60 ✗ | 46 ✗ |
+| 2160p | OMT_LQ | bars | 98 | 76 | 71 | 62 | 53 ✗ |
+| 2160p | OMT_SQ | bars | 98 | 76 | 56 ✗ | 63 | 46 ✗ |
+| 2160p | OMT_HQ | bars | 98 | 81 | 72 | 66 | 53 ✗ |
+
+### Encode, 3 threads
+
+| Resolution | Profile | Image | q | KB/frame | libvmx | vmx-codec | vmx |
+|---|---|---|---:|---:|---:|---:|---:|
+| 1080p | LQ | natural | 92 | 169 | 284 | 365 | 351 |
+| 1080p | SQ | natural | 94 | 292 | 427 | 192 | 255 |
+| 1080p | HQ | natural | 96 | 559 | 118 | 142 | 220 |
+| 1080p | OMT_LQ | natural | 92 | 169 | 263 | 241 | 258 |
+| 1080p | OMT_SQ | natural | 95 | 419 | 224 | 211 | 243 |
+| 1080p | OMT_HQ | natural | 96 | 559 | 222 | 268 | 198 |
+| 1080p | LQ | bars | 98 | 22 | 681 | 311 | 422 |
+| 1080p | SQ | bars | 98 | 22 | 529 | 239 | 209 |
+| 1080p | HQ | bars | 98 | 24 | 310 | 242 | 292 |
+| 1080p | OMT_LQ | bars | 98 | 22 | 351 | 268 | 319 |
+| 1080p | OMT_SQ | bars | 98 | 24 | 330 | 309 | 353 |
+| 1080p | OMT_HQ | bars | 98 | 24 | 302 | 315 | 334 |
+| 2160p | LQ | natural | 92 | 596 | 78 | 70 | 70 |
+| 2160p | SQ | natural | 94 | 1088 | 73 | 65 | 75 |
+| 2160p | HQ | natural | 96 | 2146 | 66 | 45 ✗ | 60 ✗ |
+| 2160p | OMT_LQ | natural | 92 | 596 | 86 | 68 | 82 |
+| 2160p | OMT_SQ | natural | 92 | 596 | 79 | 75 | 86 |
+| 2160p | OMT_HQ | natural | 94 | 1192 | 75 | 65 | 72 |
+| 2160p | LQ | bars | 98 | 76 | 106 | 105 | 106 |
+| 2160p | SQ | bars | 98 | 76 | 110 | 96 | 98 |
+| 2160p | HQ | bars | 98 | 81 | 115 | 129 | 103 |
+| 2160p | OMT_LQ | bars | 98 | 76 | 134 | 85 | 104 |
+| 2160p | OMT_SQ | bars | 98 | 76 | 102 | 110 | 101 |
+| 2160p | OMT_HQ | bars | 98 | 81 | 181 | 120 | 102 |
+
+### Decode, 1 thread
+
+| Resolution | Profile | Image | q | KB/frame | libvmx | vmx-codec | vmx |
+|---|---|---|---:|---:|---:|---:|---:|
+| 1080p | LQ | natural | 92 | 169 | 294 | 262 | 274 |
+| 1080p | SQ | natural | 94 | 292 | 216 | 191 | 180 |
+| 1080p | HQ | natural | 96 | 559 | 121 | 69 | 116 |
+| 1080p | OMT_LQ | natural | 92 | 169 | 249 | 253 | 268 |
+| 1080p | OMT_SQ | natural | 95 | 419 | 174 | 171 | 180 |
+| 1080p | OMT_HQ | natural | 96 | 559 | 109 | 96 | 139 |
+| 1080p | LQ | bars | 98 | 22 | 2345 | 1405 | 1375 |
+| 1080p | SQ | bars | 98 | 22 | 2106 | 936 | 1083 |
+| 1080p | HQ | bars | 98 | 24 | 1600 | 1262 | 1621 |
+| 1080p | OMT_LQ | bars | 98 | 22 | 1397 | 1261 | 1556 |
+| 1080p | OMT_SQ | bars | 98 | 24 | 1837 | 1532 | 1372 |
+| 1080p | OMT_HQ | bars | 98 | 24 | 2144 | 1518 | 1695 |
+| 2160p | LQ | natural | 92 | 596 | 84 | 77 | 76 |
+| 2160p | SQ | natural | 94 | 1088 | 52 ✗ | 49 ✗ | 55 ✗ |
+| 2160p | HQ | natural | 96 | 2146 | 40 ✗ | 30 ✗ | 34 ✗ |
+| 2160p | OMT_LQ | natural | 92 | 596 | 76 | 77 | 74 |
+| 2160p | OMT_SQ | natural | 92 | 596 | 89 | 87 | 75 |
+| 2160p | OMT_HQ | natural | 94 | 1192 | 57 ✗ | 59 ✗ | 61 |
+| 2160p | LQ | bars | 98 | 76 | 383 | 312 | 330 |
+| 2160p | SQ | bars | 98 | 76 | 375 | 232 | 375 |
+| 2160p | HQ | bars | 98 | 81 | 432 | 281 | 336 |
+| 2160p | OMT_LQ | bars | 98 | 76 | 418 | 289 | 385 |
+| 2160p | OMT_SQ | bars | 98 | 76 | 382 | 260 | 322 |
+| 2160p | OMT_HQ | bars | 98 | 81 | 426 | 352 | 333 |
+
+### Decode, 3 threads
+
+| Resolution | Profile | Image | q | KB/frame | libvmx | vmx-codec | vmx |
+|---|---|---|---:|---:|---:|---:|---:|
+| 1080p | LQ | natural | 92 | 169 | 325 | 350 | 524 |
+| 1080p | SQ | natural | 94 | 292 | 547 | 270 | 368 |
+| 1080p | HQ | natural | 96 | 559 | 156 | 146 | 159 |
+| 1080p | OMT_LQ | natural | 92 | 169 | 444 | 441 | 460 |
+| 1080p | OMT_SQ | natural | 95 | 419 | 276 | 188 | 313 |
+| 1080p | OMT_HQ | natural | 96 | 559 | 249 | 324 | 270 |
+| 1080p | LQ | bars | 98 | 22 | 2630 | 1120 | 2298 |
+| 1080p | SQ | bars | 98 | 22 | 1692 | 1157 | 1673 |
+| 1080p | HQ | bars | 98 | 24 | 1936 | 1108 | 2024 |
+| 1080p | OMT_LQ | bars | 98 | 22 | 2218 | 1201 | 2132 |
+| 1080p | OMT_SQ | bars | 98 | 24 | 2134 | 1254 | 2269 |
+| 1080p | OMT_HQ | bars | 98 | 24 | 2196 | 1297 | 2459 |
+| 2160p | LQ | natural | 92 | 596 | 141 | 125 | 137 |
+| 2160p | SQ | natural | 94 | 1088 | 102 | 87 | 117 |
+| 2160p | HQ | natural | 96 | 2146 | 70 | 59 ✗ | 73 |
+| 2160p | OMT_LQ | natural | 92 | 596 | 142 | 119 | 136 |
+| 2160p | OMT_SQ | natural | 92 | 596 | 155 | 132 | 136 |
+| 2160p | OMT_HQ | natural | 94 | 1192 | 110 | 91 | 103 |
+| 2160p | LQ | bars | 98 | 76 | 523 | 341 | 507 |
+| 2160p | SQ | bars | 98 | 76 | 512 | 333 | 557 |
+| 2160p | HQ | bars | 98 | 81 | 518 | 363 | 543 |
+| 2160p | OMT_LQ | bars | 98 | 76 | 571 | 361 | 354 |
+| 2160p | OMT_SQ | bars | 98 | 76 | 598 | 354 | 628 |
+| 2160p | OMT_HQ | bars | 98 | 81 | 921 | 364 | 586 |
 
 ## Reproducing
 

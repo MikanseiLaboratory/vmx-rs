@@ -1,10 +1,10 @@
 # Manual comparison run of bench/ on ARM hosts.
 #
 # workflow_dispatch is the supported way to run this. The push trigger is
-# limited to the branch that introduced the workflow, and only when bench/
-# or this file changes, so the first ARM numbers can be collected before the
-# workflow exists on the default branch. Updating BENCHMARK.md does not
-# re-run it.
+# limited to the branch that introduced the workflow, and only when the
+# harness sources or this file change, so the first ARM numbers could be
+# collected before the workflow existed on the default branch. Result CSVs
+# and BENCHMARK.md do not re-run it.
 
 name: Benchmark
 
@@ -14,7 +14,12 @@ on:
     branches:
       - cursor/vmx-benchmark-eba9
     paths:
-      - "bench/**"
+      - "bench/src/**"
+      - "bench/native/**"
+      - "bench/build.rs"
+      - "bench/Cargo.toml"
+      - "bench/Cargo.lock"
+      - "bench/README.md"
       - ".github/workflows/bench.yml"
 
 permissions:

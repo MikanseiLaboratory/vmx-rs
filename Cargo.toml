@@ -11,6 +11,9 @@ repository = "https://github.com/MikanseiLaboratory/vmx-rs"
 homepage = "https://github.com/MikanseiLaboratory/vmx-rs"
 keywords = ["video", "codec", "vmx", "omt"]
 categories = ["multimedia::video", "encoding"]
+# The comparison harness fetches libvmx and another crate. Keep it out of the
+# crates.io tarball; build it from a git checkout (see bench/README.md).
+exclude = ["bench"]
 
 [lib]
 name = "vmx"

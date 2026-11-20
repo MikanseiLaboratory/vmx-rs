@@ -1,0 +1,91 @@
+# Manual comparison run of bench/ on ARM hosts.
+#
+# workflow_dispatch is the supported way to run this. The push trigger is
+# limited to the branch that introduced the workflow, and only when the
+# harness sources or this file change, so the first ARM numbers could be
+# collected before the workflow existed on the default branch. Result CSVs
+# and BENCHMARK.md do not re-run it.
+
+name: Benchmark
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - cursor/vmx-benchmark-eba9
+    paths:
+      - "bench/src/**"
+      - "bench/native/**"
+      - "bench/build.rs"
+      - "bench/Cargo.toml"
+      - "bench/Cargo.lock"
+      - "bench/README.md"
+      - ".github/workflows/bench.yml"
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+
+jobs:
+  bench:
+    name: ${{ matrix.label }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04-arm
+            label: linux-arm64
+          - os: macos-latest
+            label: macos
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install a C++ compiler (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y clang g++
+
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.100.0"
+
+      - name: Record the host
+        run: |
+          {
+            echo "runner=${{ matrix.label }}"
+            echo "image=${{ matrix.os }}"
+            uname -a
+            if command -v lscpu >/dev/null; then lscpu; fi
+            if [ -f /proc/cpuinfo ]; then
+              grep -m1 -E 'model name|CPU implementer|CPU architecture|CPU variant|CPU part|CPU revision' /proc/cpuinfo || true
+            fi
+            if command -v sysctl >/dev/null; then
+              sysctl -n machdep.cpu.brand_string || true
+              sysctl -n hw.ncpu || true
+              sysctl -n hw.optional.neon || true
+              sw_vers || true
+            fi
+            rustc -vV
+            clang++ --version || true
+            c++ --version || true
+          } | tee cpuinfo.txt
+
+      - name: Run the harness
+        working-directory: bench
+        env:
+          VMX_BENCH_META: ../host.txt
+        run: cargo run --release --locked -- > ../results.csv
+
+      - name: Upload results
+        uses: actions/upload-artifact@v4
+        with:
+          name: bench-${{ matrix.label }}
+          path: |
+            results.csv
+            cpuinfo.txt
+            host.txt
+          if-no-files-found: error

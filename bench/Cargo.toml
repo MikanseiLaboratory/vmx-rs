@@ -1,0 +1,23 @@
+[package]
+name = "vmx-bench"
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.97"
+publish = false
+license = "MIT"
+description = "Comparison harness for libvmx, vmx-codec, and vmx. Not part of the published crate."
+
+# Own workspace so `cargo test` in the vmx package does not build this crate
+# (it fetches libvmx and vmx-codec and needs a C++ compiler).
+[workspace]
+
+[dependencies]
+vmx = { path = ".." }
+vmx-codec = { git = "https://github.com/Saul-Punybz/open-media-transport.git", rev = "fbde53cccabb1ebfff7ba773a72510ab48a64f3a" }
+
+# Match the profile this repository ships, so a release build of the path
+# dependency is the same one `cargo build --release` uses at the repo root.
+[profile.release]
+lto = "thin"
+codegen-units = 1
+opt-level = 3

@@ -1,3 +1,4 @@
 /target
+bench/target
 *.pdb
 .DS_Store

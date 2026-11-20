@@ -8,28 +8,28 @@
 
 use crate::bitstream::SliceData;
 use crate::codec::plane::PlaneView;
-#[cfg(target_arch = "aarch64")]
+#[cfg(any(target_arch = "aarch64", arm32_neon))]
 use crate::codec::plane::encode_plane_scalar;
-#[cfg(not(target_arch = "aarch64"))]
+#[cfg(not(any(target_arch = "aarch64", arm32_neon)))]
 use crate::codec::plane::{decode_plane_scalar, encode_plane_scalar};
 
-#[cfg(target_arch = "aarch64")]
+#[cfg(any(target_arch = "aarch64", arm32_neon))]
 use crate::bitstream::get_2mag_sign;
-#[cfg(target_arch = "aarch64")]
+#[cfg(any(target_arch = "aarch64", arm32_neon))]
 use crate::codec::dct::broadcast_dc;
-#[cfg(target_arch = "aarch64")]
+#[cfg(any(target_arch = "aarch64", arm32_neon))]
 use crate::tables::{
     FDCT_ROUND1, FDCT_SQRT2, FDCT_TAN1, FDCT_TAN2, FDCT_TAN3, FTAB1_128, FTAB2_128, FTAB3_128,
     FTAB4_128, IDCT_COS4, IDCT_ROW_TABLES, IDCT_TG1, IDCT_TG2, IDCT_TG3, IRND_INV_COL,
     IRND_INV_CORR, IRND_INV_ROW, RND_FRW_ROW, SHIFT_FRW_COL, SHIFT_FRW_ROW, SHIFT_INV_COL,
     SHIFT_INV_ROW,
 };
-#[cfg(target_arch = "aarch64")]
+#[cfg(any(target_arch = "aarch64", arm32_neon))]
 use crate::types::SLICE_HEIGHT;
-#[cfg(target_arch = "aarch64")]
-use std::arch::aarch64::*;
+#[cfg(any(target_arch = "aarch64", arm32_neon))]
+use crate::simd::neon_compat::*;
 
-#[cfg(target_arch = "aarch64")]
+#[cfg(any(target_arch = "aarch64", arm32_neon))]
 #[inline]
 unsafe fn madd_epi16_neon(a: int16x8_t, b: int16x8_t) -> int32x4_t {
     unsafe {
@@ -41,7 +41,7 @@ unsafe fn madd_epi16_neon(a: int16x8_t, b: int16x8_t) -> int32x4_t {
     }
 }
 
-#[cfg(target_arch = "aarch64")]
+#[cfg(any(target_arch = "aarch64", arm32_neon))]
 #[inline]
 unsafe fn mulhi_epi16_neon(a: int16x8_t, b: int16x8_t) -> int16x8_t {
     unsafe {
@@ -51,7 +51,7 @@ unsafe fn mulhi_epi16_neon(a: int16x8_t, b: int16x8_t) -> int16x8_t {
     }
 }
 
-#[cfg(target_arch = "aarch64")]
+#[cfg(any(target_arch = "aarch64", arm32_neon))]
 #[inline]
 unsafe fn mulhi_epu16_neon(a: int16x8_t, b: int16x8_t) -> int16x8_t {
     unsafe {
@@ -65,7 +65,7 @@ unsafe fn mulhi_epu16_neon(a: int16x8_t, b: int16x8_t) -> int16x8_t {
 
 /// SSE `_mm_sign_epi16(val, signs)`: negate `val` where `signs < 0`, zero where
 /// `signs == 0`, otherwise keep `val`.
-#[cfg(target_arch = "aarch64")]
+#[cfg(any(target_arch = "aarch64", arm32_neon))]
 #[inline]
 unsafe fn sign_epi16_neon(val: int16x8_t, signs: int16x8_t) -> int16x8_t {
     unsafe {
@@ -77,7 +77,7 @@ unsafe fn sign_epi16_neon(val: int16x8_t, signs: int16x8_t) -> int16x8_t {
     }
 }
 
-#[cfg(target_arch = "aarch64")]
+#[cfg(any(target_arch = "aarch64", arm32_neon))]
 #[inline]
 unsafe fn shuffle_epi32_neon(v: int16x8_t, imm: u8) -> int16x8_t {
     unsafe {
@@ -100,7 +100,7 @@ unsafe fn shuffle_epi32_neon(v: int16x8_t, imm: u8) -> int16x8_t {
     }
 }
 
-#[cfg(target_arch = "aarch64")]
+#[cfg(any(target_arch = "aarch64", arm32_neon))]
 #[target_feature(enable = "neon")]
 unsafe fn fdct_row_neon(input: int16x8_t, ftab: &[i16; 32]) -> int16x8_t {
     unsafe {
@@ -144,7 +144,7 @@ unsafe fn fdct_row_neon(input: int16x8_t, ftab: &[i16; 32]) -> int16x8_t {
 ///
 /// `A` selects bytes from rows 0..3, `B` from rows 4..7; `0xFF` marks a byte
 /// taken from the other half (`vqtbl4q_u8` yields 0 for it).
-#[cfg(target_arch = "aarch64")]
+#[cfg(any(target_arch = "aarch64", arm32_neon))]
 const ZIG_IDX_A: [[u8; 16]; 8] = [
     [0, 1, 2, 3, 16, 17, 32, 33, 18, 19, 4, 5, 6, 7, 20, 21],
     [
@@ -170,7 +170,7 @@ const ZIG_IDX_A: [[u8; 16]; 8] = [
     ],
 ];
 
-#[cfg(target_arch = "aarch64")]
+#[cfg(any(target_arch = "aarch64", arm32_neon))]
 const ZIG_IDX_B: [[u8; 16]; 8] = [
     [
         255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
@@ -198,7 +198,7 @@ const ZIG_IDX_B: [[u8; 16]; 8] = [
 
 /// Permute eight raster-ordered coefficient rows into zigzag order and return
 /// the non-zero mask (bit `i` set when zigzag position `i` is non-zero).
-#[cfg(target_arch = "aarch64")]
+#[cfg(any(target_arch = "aarch64", arm32_neon))]
 #[inline]
 #[target_feature(enable = "neon")]
 unsafe fn zigzag_permute_neon(rows: &[int16x8_t; 8], out: *mut i16) -> u64 {
@@ -239,7 +239,7 @@ unsafe fn zigzag_permute_neon(rows: &[int16x8_t; 8], out: *mut i16) -> u64 {
 /// # Safety
 /// Caller must enable NEON. `src` must cover 8 rows at `stride`, `matrix` holds 192
 /// `u16`s, and `out` receives zigzag-ordered coefficients.
-#[cfg(target_arch = "aarch64")]
+#[cfg(any(target_arch = "aarch64", arm32_neon))]
 #[target_feature(enable = "neon")]
 pub unsafe fn fdct_quant_zig_neon(
     src: *const u8,
@@ -353,7 +353,7 @@ pub unsafe fn fdct_quant_zig_neon(
 }
 
 /// Two's-magnitude-plus-one symbol for one coefficient.
-#[cfg(target_arch = "aarch64")]
+#[cfg(any(target_arch = "aarch64", arm32_neon))]
 #[inline]
 fn symbol(coeff: i16) -> u32 {
     (get_2mag_sign(coeff) as u32).wrapping_add(1)
@@ -368,18 +368,18 @@ pub fn encode_plane(
     dc_shift: i32,
     temp_block: &mut [i16; 64],
 ) {
-    #[cfg(target_arch = "aarch64")]
+    #[cfg(any(target_arch = "aarch64", arm32_neon))]
     {
         // SAFETY: NEON/ASIMD is baseline on Rust aarch64 targets.
         unsafe {
             encode_plane_neon(plane, dc, ac, encode_matrix, dc_shift, temp_block);
         }
     }
-    #[cfg(not(target_arch = "aarch64"))]
+    #[cfg(not(any(target_arch = "aarch64", arm32_neon)))]
     encode_plane_scalar(plane, dc, ac, encode_matrix, dc_shift, temp_block);
 }
 
-#[cfg(target_arch = "aarch64")]
+#[cfg(any(target_arch = "aarch64", arm32_neon))]
 #[target_feature(enable = "neon")]
 unsafe fn encode_plane_neon(
     plane: &PlaneView<'_>,
@@ -466,18 +466,18 @@ pub fn decode_plane(
     dc_shift: i32,
     temp_block: &mut [i16; 64],
 ) {
-    #[cfg(target_arch = "aarch64")]
+    #[cfg(any(target_arch = "aarch64", arm32_neon))]
     {
         // SAFETY: NEON/ASIMD is baseline on Rust aarch64 targets.
         unsafe {
             decode_plane_neon(plane, dc, ac, decode_matrix, dc_shift, temp_block);
         }
     }
-    #[cfg(not(target_arch = "aarch64"))]
+    #[cfg(not(any(target_arch = "aarch64", arm32_neon)))]
     decode_plane_scalar(plane, dc, ac, decode_matrix, dc_shift, temp_block);
 }
 
-#[cfg(target_arch = "aarch64")]
+#[cfg(any(target_arch = "aarch64", arm32_neon))]
 #[target_feature(enable = "neon")]
 unsafe fn decode_plane_neon(
     plane: &mut PlaneView<'_>,
@@ -576,7 +576,7 @@ unsafe fn decode_plane_neon(
 
 /// Byte indices used to gather the entropy (zigzag) array back into raster
 /// rows. `A` selects bytes from coefficient rows 0..3, `B` from rows 4..7.
-#[cfg(target_arch = "aarch64")]
+#[cfg(any(target_arch = "aarch64", arm32_neon))]
 const DEC_IDX_A: [[u8; 16]; 8] = [
     [0, 1, 2, 3, 10, 11, 12, 13, 28, 29, 30, 31, 54, 55, 56, 57],
     [4, 5, 8, 9, 14, 15, 26, 27, 32, 33, 52, 53, 58, 59, 255, 255],
@@ -600,7 +600,7 @@ const DEC_IDX_A: [[u8; 16]; 8] = [
     ],
 ];
 
-#[cfg(target_arch = "aarch64")]
+#[cfg(any(target_arch = "aarch64", arm32_neon))]
 const DEC_IDX_B: [[u8; 16]; 8] = [
     [
         255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
@@ -633,7 +633,7 @@ const DEC_IDX_B: [[u8; 16]; 8] = [
 ///
 /// # Safety
 /// Caller must enable NEON.
-#[cfg(target_arch = "aarch64")]
+#[cfg(any(target_arch = "aarch64", arm32_neon))]
 #[target_feature(enable = "neon")]
 unsafe fn inverse_zigzag_8x8_neon(coeffs: &[i16; 64]) -> [int16x8_t; 8] {
     unsafe {
@@ -664,7 +664,7 @@ unsafe fn inverse_zigzag_8x8_neon(coeffs: &[i16; 64]) -> [int16x8_t; 8] {
 ///
 /// # Safety
 /// Caller must enable NEON. `dst` must cover an 8×8 block at `stride`.
-#[cfg(target_arch = "aarch64")]
+#[cfg(any(target_arch = "aarch64", arm32_neon))]
 #[target_feature(enable = "neon")]
 pub unsafe fn zig_invquant_idct_neon(
     coeffs: &mut [i16; 64],
@@ -695,7 +695,7 @@ pub unsafe fn zig_invquant_idct_neon(
 ///
 /// # Safety
 /// Caller must enable NEON; `tab` must contain 32 `i16` values.
-#[cfg(target_arch = "aarch64")]
+#[cfg(any(target_arch = "aarch64", arm32_neon))]
 #[target_feature(enable = "neon")]
 unsafe fn idct_row_neon(x: [i16; 8], tab: &[i16; 32]) -> [i16; 8] {
     unsafe {
@@ -706,7 +706,7 @@ unsafe fn idct_row_neon(x: [i16; 8], tab: &[i16; 32]) -> [i16; 8] {
     }
 }
 
-#[cfg(target_arch = "aarch64")]
+#[cfg(any(target_arch = "aarch64", arm32_neon))]
 #[target_feature(enable = "neon")]
 unsafe fn idct_row_neon_vec(v: int16x8_t, tab: &[i16; 32]) -> int16x8_t {
     unsafe {
@@ -749,7 +749,7 @@ unsafe fn idct_row_neon_vec(v: int16x8_t, tab: &[i16; 32]) -> int16x8_t {
 ///
 /// # Safety
 /// Caller must enable NEON.
-#[cfg(target_arch = "aarch64")]
+#[cfg(any(target_arch = "aarch64", arm32_neon))]
 #[target_feature(enable = "neon")]
 unsafe fn idct_columns_8_neon(rows: [int16x8_t; 8], add_val: i16) -> [int16x8_t; 8] {
     unsafe {

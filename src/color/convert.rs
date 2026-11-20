@@ -43,7 +43,7 @@ pub(crate) fn uyvy_to_planar(
     v_stride: usize,
     size: Size,
 ) {
-    #[cfg(target_arch = "aarch64")]
+    #[cfg(any(target_arch = "aarch64", arm32_neon))]
     {
         // SAFETY: NEON/ASIMD is baseline on Rust aarch64 targets.
         unsafe { uyvy_to_planar_neon(src, stride, y, y_stride, u, u_stride, v, v_stride, size) }
@@ -60,7 +60,7 @@ pub(crate) fn uyvy_to_planar(
         uyvy_to_planar_scalar(src, stride, y, y_stride, u, u_stride, v, v_stride, size)
     }
 
-    #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
+    #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64", target_arch = "arm")))]
     uyvy_to_planar_scalar(src, stride, y, y_stride, u, u_stride, v, v_stride, size);
 }
 
@@ -97,7 +97,7 @@ pub fn uyvy_to_planar_scalar(
 }
 
 /// NEON UYVY → planar (32 pixels per iteration, bit-exact with scalar).
-#[cfg(target_arch = "aarch64")]
+#[cfg(any(target_arch = "aarch64", arm32_neon))]
 #[target_feature(enable = "neon")]
 pub unsafe fn uyvy_to_planar_neon(
     src: &[u8],
@@ -110,7 +110,7 @@ pub unsafe fn uyvy_to_planar_neon(
     v_stride: usize,
     size: Size,
 ) {
-    use std::arch::aarch64::*;
+    use crate::simd::neon_compat::*;
     unsafe {
         let width = size.width as usize;
         for row in 0..size.height as usize {
@@ -259,7 +259,7 @@ pub(crate) fn planar_to_uyvy(
     stride: usize,
     size: Size,
 ) {
-    #[cfg(target_arch = "aarch64")]
+    #[cfg(any(target_arch = "aarch64", arm32_neon))]
     {
         // SAFETY: NEON/ASIMD is baseline on Rust aarch64 targets.
         unsafe { planar_to_uyvy_neon(y, y_stride, u, u_stride, v, v_stride, dst, stride, size) }
@@ -275,7 +275,7 @@ pub(crate) fn planar_to_uyvy(
         planar_to_uyvy_scalar(y, y_stride, u, u_stride, v, v_stride, dst, stride, size)
     }
 
-    #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
+    #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64", target_arch = "arm")))]
     planar_to_uyvy_scalar(y, y_stride, u, u_stride, v, v_stride, dst, stride, size);
 }
 
@@ -311,7 +311,7 @@ pub fn planar_to_uyvy_scalar(
 }
 
 /// NEON planar → UYVY (32 pixels per iteration, bit-exact with scalar).
-#[cfg(target_arch = "aarch64")]
+#[cfg(any(target_arch = "aarch64", arm32_neon))]
 #[target_feature(enable = "neon")]
 pub unsafe fn planar_to_uyvy_neon(
     y: &[u8],
@@ -324,7 +324,7 @@ pub unsafe fn planar_to_uyvy_neon(
     stride: usize,
     size: Size,
 ) {
-    use std::arch::aarch64::*;
+    use crate::simd::neon_compat::*;
     unsafe {
         let width = size.width as usize;
         for row in 0..size.height as usize {
@@ -1282,7 +1282,7 @@ mod tests {
         assert_eq!(src, out);
     }
 
-    #[cfg(target_arch = "aarch64")]
+    #[cfg(any(target_arch = "aarch64", arm32_neon))]
     #[test]
     fn uyvy_to_planar_neon_matches_scalar() {
         for width in [2, 4, 30, 32, 34, 62, 64, 66, 130] {
@@ -1317,7 +1317,7 @@ mod tests {
         }
     }
 
-    #[cfg(target_arch = "aarch64")]
+    #[cfg(any(target_arch = "aarch64", arm32_neon))]
     #[test]
     fn planar_to_uyvy_neon_matches_scalar() {
         for width in [2, 4, 30, 32, 34, 62, 64, 66, 130] {
@@ -1537,7 +1537,7 @@ mod tests {
                 ColorSimdPath::Sse2,
                 #[cfg(target_arch = "x86_64")]
                 ColorSimdPath::Avx2,
-                #[cfg(target_arch = "aarch64")]
+                #[cfg(any(target_arch = "aarch64", arm32_neon))]
                 ColorSimdPath::Neon,
             ] {
                 #[cfg(target_arch = "x86_64")]
@@ -1684,7 +1684,7 @@ mod tests {
                 ColorSimdPath::Sse2,
                 #[cfg(target_arch = "x86_64")]
                 ColorSimdPath::Avx2,
-                #[cfg(target_arch = "aarch64")]
+                #[cfg(any(target_arch = "aarch64", arm32_neon))]
                 ColorSimdPath::Neon,
             ] {
                 #[cfg(target_arch = "x86_64")]
@@ -1892,7 +1892,7 @@ mod tests {
                 );
             }
         }
-        #[cfg(target_arch = "aarch64")]
+        #[cfg(any(target_arch = "aarch64", arm32_neon))]
         {
             let neon = time_path(ColorSimdPath::Neon);
             eprintln!(

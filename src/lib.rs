@@ -1,6 +1,12 @@
 //! Pure Rust VMX1 video codec — byte-compatible with libvmx.
 //!
 //! No native library linkage. SIMD paths use `std::arch` with runtime dispatch.
+//!
+//! The AArch32 (armv7) NEON kernels are nightly-only and gated behind the
+//! `arm32-neon` feature (rust-lang/rust#111800).
+#![cfg_attr(arm32_neon, feature(stdarch_arm_neon_intrinsics))]
+#![cfg_attr(arm32_neon, feature(stdarch_arm_feature_detection))]
+#![cfg_attr(arm32_neon, feature(arm_target_feature))]
 
 #![allow(clippy::too_many_arguments)]
 

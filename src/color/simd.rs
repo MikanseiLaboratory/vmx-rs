@@ -40,7 +40,19 @@ impl ColorSimdPath {
         {
             Self::Neon
         }
-        #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
+        #[cfg(all(target_arch = "arm", arm32_neon))]
+        {
+            if std::arch::is_arm_feature_detected!("neon") {
+                Self::Neon
+            } else {
+                Self::Scalar
+            }
+        }
+        #[cfg(all(target_arch = "arm", not(arm32_neon)))]
+        {
+            Self::Scalar
+        }
+        #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64", target_arch = "arm")))]
         {
             Self::Scalar
         }
@@ -351,10 +363,10 @@ mod x86 {
     }
 }
 
-#[cfg(target_arch = "aarch64")]
+#[cfg(any(target_arch = "aarch64", arm32_neon))]
 mod arm {
     use super::yuv_to_bgra_pixel;
-    use std::arch::aarch64::*;
+    use crate::simd::neon_compat::*;
 
     #[inline]
     unsafe fn mulhi_s16(a: int16x8_t, coeff: i16) -> int16x8_t {
@@ -504,7 +516,7 @@ pub fn yuv422_band_to_bgra_dispatch(
                 y, y_stride, u, u_stride, v, v_stride, y_row0, rows, width, dst, dst_stride, table,
             )
         },
-        #[cfg(target_arch = "aarch64")]
+        #[cfg(any(target_arch = "aarch64", arm32_neon))]
         ColorSimdPath::Neon => unsafe {
             arm::yuv422_band_to_bgra_neon(
                 y, y_stride, u, u_stride, v, v_stride, y_row0, rows, width, dst, dst_stride, table,
@@ -756,12 +768,12 @@ mod x86_bgra {
     }
 }
 
-#[cfg(target_arch = "aarch64")]
+#[cfg(any(target_arch = "aarch64", arm32_neon))]
 mod arm_bgra {
     use crate::color::convert::bgra_to_yuv4224_scalar;
     use crate::tables::ShortRgb;
     use crate::types::Size;
-    use std::arch::aarch64::*;
+    use crate::simd::neon_compat::*;
 
     /// Signed U/V path (8 pixels).
     #[inline]
@@ -965,7 +977,7 @@ pub fn bgra_to_yuv4224_dispatch(
                 )
             }
         }
-        #[cfg(target_arch = "aarch64")]
+        #[cfg(any(target_arch = "aarch64", arm32_neon))]
         ColorSimdPath::Neon => unsafe {
             arm_bgra::bgra_to_yuv4224_neon(
                 src, src_stride, y, y_stride, u, u_stride, v, v_stride, a, a_stride, size, table,

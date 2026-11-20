@@ -18,6 +18,8 @@ use crate::bitstream::get_2mag_sign;
 #[cfg(any(target_arch = "aarch64", arm32_neon))]
 use crate::codec::dct::broadcast_dc;
 #[cfg(any(target_arch = "aarch64", arm32_neon))]
+use crate::simd::neon_compat::*;
+#[cfg(any(target_arch = "aarch64", arm32_neon))]
 use crate::tables::{
     FDCT_ROUND1, FDCT_SQRT2, FDCT_TAN1, FDCT_TAN2, FDCT_TAN3, FTAB1_128, FTAB2_128, FTAB3_128,
     FTAB4_128, IDCT_COS4, IDCT_ROW_TABLES, IDCT_TG1, IDCT_TG2, IDCT_TG3, IRND_INV_COL,
@@ -26,8 +28,6 @@ use crate::tables::{
 };
 #[cfg(any(target_arch = "aarch64", arm32_neon))]
 use crate::types::SLICE_HEIGHT;
-#[cfg(any(target_arch = "aarch64", arm32_neon))]
-use crate::simd::neon_compat::*;
 
 #[cfg(any(target_arch = "aarch64", arm32_neon))]
 #[inline]

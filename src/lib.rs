@@ -7,7 +7,6 @@
 #![cfg_attr(arm32_neon, feature(stdarch_arm_neon_intrinsics))]
 #![cfg_attr(arm32_neon, feature(stdarch_arm_feature_detection))]
 #![cfg_attr(arm32_neon, feature(arm_target_feature))]
-
 #![allow(clippy::too_many_arguments)]
 
 mod bitrate;

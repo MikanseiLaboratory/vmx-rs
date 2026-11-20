@@ -771,9 +771,9 @@ mod x86_bgra {
 #[cfg(any(target_arch = "aarch64", arm32_neon))]
 mod arm_bgra {
     use crate::color::convert::bgra_to_yuv4224_scalar;
+    use crate::simd::neon_compat::*;
     use crate::tables::ShortRgb;
     use crate::types::Size;
-    use crate::simd::neon_compat::*;
 
     /// Signed U/V path (8 pixels).
     #[inline]

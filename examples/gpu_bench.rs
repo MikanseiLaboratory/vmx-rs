@@ -1,7 +1,9 @@
 //! Compare GPU texture decode/encode with the CPU work that replaces each GPU path.
 //!
 //! The timed loops are unchanged. A UYVY frame is converted to BGRA on the CPU
-//! before those loops; that conversion is not included in the samples.
+//! before those loops; that conversion is not included in the samples. Each
+//! GPU path is also run untimed (`--prime`, default 20) before its timed
+//! samples, so the first profile at a resolution is not the cold transfer.
 //!
 //! Usage:
 //!   cargo run --release --example gpu_bench --features wgpu
@@ -15,7 +17,8 @@
 //! `1080p-natural`, `2160p-bars`, with or without `.uyvy.gz`). `natural` and
 //! `bars` need `--res 1080` or `--res 2160`. Omit `--image` for the synthetic
 //! gradient. `--profile` is `OMT_LQ`, `OMT_SQ`, `OMT_HQ`, or `all` (default
-//! `OMT_SQ`).
+//! `OMT_SQ`). `--prime N` (default 20) is the untimed GPU-path iterations
+//! before the timed samples; `--prime 0` skips them.
 //!
 //! CSV on stdout:
 //!   res,image,profile,case,ms_median,fps_median,ms_samples
@@ -235,6 +238,12 @@ fn emit_case(out: &mut dyn Write, frame: &Frame, profile: &str, label: &str, sam
     let _ = out.flush();
 }
 
+fn discard_iters<F: FnMut()>(iters: usize, mut body: F) {
+    for _ in 0..iters {
+        body();
+    }
+}
+
 fn timed_iters<F: FnMut()>(warmup: usize, iters: usize, mut body: F) -> Vec<f64> {
     for _ in 0..warmup {
         body();
@@ -248,15 +257,22 @@ fn timed_iters<F: FnMut()>(warmup: usize, iters: usize, mut body: F) -> Vec<f64>
     samples
 }
 
+struct Pass {
+    iters: usize,
+    prime: usize,
+}
+
 fn bench_resolution(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
     frame: &Frame,
     profile: Profile,
     profile_name: &str,
-    iters: usize,
+    pass: Pass,
     out: &mut dyn Write,
 ) {
+    let iters = pass.iters;
+    let prime = pass.prime;
     let width = frame.width;
     let height = frame.height;
     let bgra = &frame.bgra;
@@ -311,6 +327,67 @@ fn bench_resolution(
     );
 
     quality_report(device, queue, frame, profile, &encoded, &src_tex);
+
+    let mut gpu_enc = Codec::new(Config {
+        width,
+        height,
+        profile,
+        color_space: Default::default(),
+    })
+    .expect("gpu enc");
+
+    if prime > 0 {
+        eprintln!("priming {prime} untimed iters of each GPU path (not in the median)");
+        discard_iters(prime, || {
+            cpu_dec
+                .decode_bgra(&mut cpu_out, stride)
+                .expect("prime decode");
+            let _tex =
+                gpu::upload_bgra_texture(device, queue, width as u32, height as u32, &cpu_out);
+            wait_idle(device);
+        });
+        discard_iters(prime, || {
+            let _frame = gpu_dec
+                .decode_to_texture(device, queue)
+                .expect("prime gpu decode");
+            wait_idle(device);
+        });
+        discard_iters(prime, || {
+            cpu_dec
+                .decode_preview_bgra(&mut cpu_preview, pstride)
+                .expect("prime preview");
+            let _tex = gpu::upload_bgra_texture(
+                device,
+                queue,
+                ps.width as u32,
+                ps.height as u32,
+                &cpu_preview,
+            );
+            wait_idle(device);
+        });
+        discard_iters(prime, || {
+            let _frame = gpu_dec
+                .decode_preview_to_texture(device, queue)
+                .expect("prime gpu preview");
+            wait_idle(device);
+        });
+        discard_iters(prime, || {
+            let pixels =
+                gpu::read_texture_bgra(device, queue, &src_tex, width as u32, height as u32)
+                    .expect("prime readback");
+            enc.encode_bgra(&pixels, stride).expect("prime cpu encode");
+        });
+        discard_iters(prime, || {
+            gpu_enc
+                .encode_from_texture(device, queue, &src_tex)
+                .expect("prime gpu encode");
+        });
+        discard_iters(prime, || {
+            gpu_enc
+                .encode_from_texture_opaque(device, queue, &src_tex)
+                .expect("prime gpu opaque");
+        });
+    }
 
     let warmup = (iters / 5).clamp(2, 8);
 
@@ -420,16 +497,11 @@ fn bench_resolution(
         }),
     );
 
-    let mut gpu_enc = Codec::new(Config {
-        width,
-        height,
-        profile,
-        color_space: Default::default(),
-    })
-    .expect("gpu enc");
-    gpu_enc
-        .encode_from_texture(device, queue, &src_tex)
-        .expect("gpu encode warmup");
+    if prime == 0 {
+        gpu_enc
+            .encode_from_texture(device, queue, &src_tex)
+            .expect("gpu encode warmup");
+    }
 
     emit_case(
         out,
@@ -635,6 +707,7 @@ struct Args {
     width: Option<i32>,
     height: Option<i32>,
     iters: usize,
+    prime: usize,
     profiles: Vec<(Profile, &'static str)>,
     require_gpu: bool,
     probe: bool,
@@ -655,6 +728,7 @@ Options:
   --synthetic         in-memory gradient (default when --image is omitted)
   --width PX --height PX
   --iters N           timed samples per case (default 20). Warm-up is excluded.
+  --prime N           untimed GPU-path iterations before timing (default 20)
   --profile NAME      OMT_LQ, OMT_SQ, OMT_HQ, or all (default OMT_SQ)
   --require-gpu       exit 2 if the adapter is llvmpipe or a CPU device
   --probe             print the adapter and exit before measuring
@@ -706,6 +780,7 @@ fn parse_args() -> Args {
             width: Some(width),
             height: Some(height),
             iters,
+            prime: 20,
             profiles: vec![(Profile::OmtSq, "OMT_SQ")],
             require_gpu: false,
             probe: false,
@@ -720,6 +795,7 @@ fn parse_args() -> Args {
         width: None,
         height: None,
         iters: 20,
+        prime: 20,
         profiles: vec![(Profile::OmtSq, "OMT_SQ")],
         require_gpu: false,
         probe: false,
@@ -741,6 +817,11 @@ fn parse_args() -> Args {
                 args.iters = take_value(&raw, &mut i, "--iters")
                     .parse()
                     .unwrap_or_else(|_| panic!("--iters expects an integer"));
+            }
+            "--prime" => {
+                args.prime = take_value(&raw, &mut i, "--prime")
+                    .parse()
+                    .unwrap_or_else(|_| panic!("--prime expects an integer"));
             }
             "--profile" => {
                 args.profiles = parse_profile(&take_value(&raw, &mut i, "--profile"));
@@ -834,7 +915,10 @@ fn main() {
                 &frame,
                 *profile,
                 profile_name,
-                iters,
+                Pass {
+                    iters,
+                    prime: args.prime,
+                },
                 &mut out,
             );
             eprintln!();

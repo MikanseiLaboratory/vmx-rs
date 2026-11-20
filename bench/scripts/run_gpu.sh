@@ -12,12 +12,15 @@
 #
 # 1080p uses GPU_BENCH_ITERS (default 20). 2160p uses half of that, and at
 # least 4, matching the synthetic second pass in examples/gpu_bench.rs.
-# Warm-up iterations are not part of the median. The CSV replaces OUT.
+# gpu_bench then discards GPU_BENCH_PRIME (default 20) untimed iterations of
+# each GPU path before the timed samples. Those iterations are not in the
+# CSV. The per-case warm-up inside the timed loop is also excluded. The CSV
+# replaces OUT.
 #
 # One image and one profile (CSV on stdout, notes on stderr):
 #   cargo run --release --example gpu_bench --features wgpu --locked -- \
 #     --image bench/images/1080p-natural.uyvy.gz --profile OMT_HQ --iters 20 \
-#     --require-gpu
+#     --prime 20 --require-gpu
 #
 # Synthetic gradient, OMT_SQ, 1920x1080 and then 3840x2160:
 #   cargo run --release --example gpu_bench --features wgpu --locked -- \
@@ -30,8 +33,13 @@ cd "$ROOT"
 
 OUT=${OUT:-"$ROOT/bench/results/gcp-gpu-l4-images.csv"}
 ITERS=${GPU_BENCH_ITERS:-20}
+PRIME=${GPU_BENCH_PRIME:-20}
 if ! [[ "$ITERS" =~ ^[1-9][0-9]*$ ]]; then
   echo "GPU_BENCH_ITERS must be a positive integer (got $ITERS)" >&2
+  exit 1
+fi
+if ! [[ "$PRIME" =~ ^[0-9]+$ ]]; then
+  echo "GPU_BENCH_PRIME must be a non-negative integer (got $PRIME)" >&2
   exit 1
 fi
 
@@ -74,6 +82,7 @@ for image in "${images[@]}"; do
       --image "$image" \
       --profile "$profile" \
       --iters "$iters" \
+      --prime "$PRIME" \
       --require-gpu \
       --no-header \
       >>"$OUT"

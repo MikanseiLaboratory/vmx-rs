@@ -2,7 +2,7 @@
 
 CPU numbers below are from dedicated GCP Spot VMs in Tokyo (`asia-northeast1`) on 2026-11-20. They replace the earlier shared-VM and GitHub Actions tables as the primary result. Each table is one pass. A gap of a few percent is one sample, not a settled ordering.
 
-Fps columns, left to right, are libvmx (official), vmx-codec (Saul), and vmx. The x86-64 tables insert libvmx 128-bit after the AVX2 column. Every comparison table ends with a Fastest column naming the winner on that row (`libvmx`, `libvmx 128-bit`, `vmx-codec`, `vmx`, or, in the wgpu table, the path name). **Bold** is that winner's value; a tie bolds each tied value and lists every name. In the fps tables the winner is the highest median. In the ratio tables the winner is the highest geometric mean of fps over the rows in that line; libvmx's ratio is 1 and is not printed, and the winner's ratio cell is bold when the winner is vmx or vmx-codec. In the wgpu table, Fastest and bold ignore the host-pixel reference and name the faster of the GPU path and the CPU path that includes the texture transfer. The profile cell is the OMT name, the sender's quality name, and the fixed q, as in `OMT_HQ — High (96)`. `✗` is a median below 60 fps.
+Fps columns, left to right, are libvmx (official), vmx-codec (Saul), and vmx. The x86-64 tables insert libvmx 128-bit after the AVX2 column. Every comparison table ends with a Fastest column naming the winner on that row (`libvmx`, `libvmx 128-bit`, `vmx-codec`, `vmx`, or, in the wgpu table, the path name). **Bold** is that winner's value; a tie bolds each tied value and lists every name. In the fps tables the winner is the highest median. In the ratio tables the winner is the highest geometric mean of fps over the rows in that line; libvmx's ratio is 1 and is not printed, and the winner's ratio cell is bold when the winner is vmx or vmx-codec. In the wgpu table, Fastest and bold ignore the host-pixel reference and name the faster of the GPU path and the CPU path that includes the texture transfer. A † on a wgpu ratio is the cold first CPU-plus-transfer decode at that resolution; that ratio is not a settled GPU advantage. The profile cell is the OMT name, the sender's quality name, and the fixed q, as in `OMT_HQ — High (96)`. `✗` is a median below 60 fps.
 
 | Implementation | Commit / version | What was timed |
 |---|---|---|
@@ -265,26 +265,83 @@ Google Axion, Neoverse-V2, 8 cores. 144 rows, all byte-identical to libvmx 128-b
 
 ## wgpu — NVIDIA L4
 
-`g2-standard-4` with an L4, same Tokyo day. `bench/scripts/` does not launch this measurement, and the repository has no L4 stdout that names a file under `bench/images/`. The CSV case names match the labels printed by `examples/gpu_bench.rs`. That example does not open those UYVY files. `bench_resolution` fills a BGRA buffer in memory (`examples/gpu_bench.rs` lines 195–203): blue = `x % 256`, green = `y % 256`, red = 128, alpha = 255. It is neither `natural` nor `bars`. The CSV rows are 1080p and 2160p; that `main` runs 1920×1080 and, when those are the arguments, also 3840×2160. The profile is `Profile::OmtSq`. CSV: [`bench/results/gcp-gpu-l4.csv`](bench/results/gcp-gpu-l4.csv).
+`g2-standard-4` Spot in `asia-northeast1-c`, Ubuntu 24.04, NVIDIA driver 580.178.04, one L4. The measured binary is `af1f5e3`. Command: `OUT=/tmp/gpu.csv GPU_BENCH_ITERS=20 bash bench/scripts/run_gpu.sh`. Every process reported adapter `NVIDIA L4`, backend Vulkan, device type `DiscreteGpu`. 1080p takes 20 timed samples and 2160p takes 10. The median excludes the per-case warm-up, `(iters/5)` clamped to 2..=8, which is 4 samples at 1080p and 2 at 2160p. That binary did not run the longer untimed prime described below.
 
-The CPU columns are the same `vmx` build on this VM (4 vCPU, Cascade Lake, AVX2, all threads). Fastest and bold compare only the GPU path with the CPU path that includes the texture transfer. The host-pixel column stays as a reference and is not part of that choice. The opaque encode has no CPU-plus-transfer figure, so those rows have no Fastest name.
+The frames are the gzip UYVY files in [`bench/images/`](bench/images/README.md): `1080p-natural.uyvy.gz`, `1080p-bars.uyvy.gz`, `2160p-natural.uyvy.gz`, and `2160p-bars.uyvy.gz`. `examples/gpu_bench.rs` converts UYVY to BGRA on the CPU before the timed loops. That conversion is not in the samples. CSV: [`bench/results/gcp-gpu-l4-images.csv`](bench/results/gcp-gpu-l4-images.csv). `ms_samples` is empty. The cells below are the logged `ms_median` and `fps_median`, not a fresh rounding of each other.
 
-| Resolution | Image | Operation | CPU, host pixels | CPU + texture transfer | GPU (wgpu) | GPU / CPU+transfer | Fastest |
-| --- | --- | --- | ---: | ---: | ---: | ---: | --- |
-| 1080p | synthetic BGRA, not bench/images | Decode → BGRA texture | 516 fps (1.94 ms) | 281 fps (3.55 ms) | **478 fps (2.09 ms)** | 1.70× | GPU (wgpu) |
-| 1080p | synthetic BGRA, not bench/images | Preview (1/8) → texture | 1377 fps (0.73 ms) | **1328 fps (0.75 ms)** | 1190 fps (0.84 ms) | 0.90× | CPU + texture transfer |
-| 1080p | synthetic BGRA, not bench/images | Encode, BGRA texture → bitstream (alpha, 4 planes) | 278 fps (3.60 ms) | 176 fps (5.69 ms) | **183 fps (5.45 ms)** | 1.04× | GPU (wgpu) |
-| 1080p | synthetic BGRA, not bench/images | Encode, BGRA texture → bitstream (opaque, 3 planes) | 352 fps (2.84 ms) | — | 262 fps (3.82 ms) | 0.74× vs host pixels | — |
-| 2160p | synthetic BGRA, not bench/images | Decode → BGRA texture | 131 fps (7.64 ms) | 71 fps (14.08 ms) | **118 fps (8.45 ms)** | 1.67× | GPU (wgpu) |
-| 2160p | synthetic BGRA, not bench/images | Preview (1/8) → texture | 453 fps (2.21 ms) | **429 fps (2.33 ms)** | 419 fps (2.38 ms) | 0.98× | CPU + texture transfer |
-| 2160p | synthetic BGRA, not bench/images | Encode, BGRA texture → bitstream (alpha, 4 planes) | 70 fps (14.28 ms) | 37 fps ✗ (26.70 ms) | **42 fps ✗ (23.99 ms)** | 1.11× | GPU (wgpu) |
-| 2160p | synthetic BGRA, not bench/images | Encode, BGRA texture → bitstream (opaque, 3 planes) | 89 fps (11.28 ms) | — | 60 fps (16.64 ms) | 0.68× vs host pixels | — |
+The CPU columns are the same `vmx` build on this VM's 4 vCPU, with the codec's default thread count capped at those 4 threads. `Codec::new` calls `set_quality(80)`. The OMT minimum is 52, so the q in the profile cell is 80. It is the starting q, not the settled rate-control q in the CPU tables. Decode uses the packet from the first `save_to`, written at that q. GPU encode does not call `save_to`, so it stays at 80. The CPU encode instance calls `save_to` once before timing, which can step q; that stepped value was not logged.
 
-GPU decode versus CPU decode differs by at most 3 LSB. PSNR is 54.6 dB at 1080p and 64.1 dB at 2160p (54.55 and 64.11 in the log). GPU preview and GPU encode match the CPU path bit for bit (PSNR 100 dB). Encode does colour conversion, FDCT, and quantisation on the GPU; Golomb coding stays on the CPU. Preview is the CPU `decode_preview_bgra` plus `queue.write_texture`.
+Fastest and bold compare only the GPU path with the CPU path that includes the texture transfer. The host-pixel column is a reference and is not bold. Opaque encode has no CPU-plus-transfer figure, so those rows have no Fastest name and the ratio is against host pixels.
 
-The CPU-plus-transfer decode time on this VM moved between 3.5 ms and 11.5 ms at 1080p across the three runs (11.47, 3.55, 3.54; the median is 3.55). Treat that column as rough. The GPU columns were stable across the same three runs.
+The script measures natural before bars and `OMT_LQ` before `OMT_SQ` and `OMT_HQ`. The first profile at each resolution, natural × OMT_LQ, has a decode CPU-plus-transfer median far below the same image at the other two profiles (1080p 92.4 fps against about 330; 2160p 24.4 fps against about 84). That is a cold first transfer. The † ratios are not a settled GPU advantage. The other rows from those same processes are not marked.
 
-The first process did not see the L4. The NVIDIA Vulkan ICD failed to load (`libGLX_nvidia.so.0`), and wgpu used Mesa llvmpipe with no error from `request_headless_device()`. Installing `libnvidia-gl-580-server` and `libegl1` made the discrete L4 visible (Vulkan 1.4.312, `BGRA8UNORM_STORAGE` true). The table is that L4 run. The llvmpipe pass is not a GPU result and is not tabulated here.
+| Resolution | Image | Profile | Operation | CPU, host pixels | CPU + texture transfer | GPU (wgpu) | GPU / CPU+transfer | Fastest |
+| --- | --- | --- | --- | ---: | ---: | ---: | ---: | --- |
+| 1080p | natural | OMT_LQ — Low (80) | Decode → BGRA texture | 718.7 fps (1.391 ms) | 92.4 fps (10.823 ms) | **574.7 fps (1.740 ms)** | 6.22× † | GPU (wgpu) |
+| 1080p | natural | OMT_LQ — Low (80) | Preview (1/8) → texture | 1485.7 fps (0.673 ms) | **1430.5 fps (0.699 ms)** | 1310.0 fps (0.763 ms) | 0.92× | CPU + texture transfer |
+| 1080p | natural | OMT_LQ — Low (80) | Encode, BGRA texture → bitstream (alpha, 4 planes) | 286.3 fps (3.493 ms) | 177.8 fps (5.625 ms) | **187.8 fps (5.326 ms)** | 1.06× | GPU (wgpu) |
+| 1080p | natural | OMT_LQ — Low (80) | Encode, BGRA texture → bitstream (opaque, 3 planes) | 363.6 fps (2.751 ms) | — | 272.5 fps (3.670 ms) | 0.75× vs host pixels | — |
+| 1080p | natural | OMT_SQ — Medium (80) | Decode → BGRA texture | 682.1 fps (1.466 ms) | 329.9 fps (3.031 ms) | **555.4 fps (1.801 ms)** | 1.68× | GPU (wgpu) |
+| 1080p | natural | OMT_SQ — Medium (80) | Preview (1/8) → texture | 1326.3 fps (0.754 ms) | **1274.7 fps (0.784 ms)** | 1178.2 fps (0.849 ms) | 0.92× | CPU + texture transfer |
+| 1080p | natural | OMT_SQ — Medium (80) | Encode, BGRA texture → bitstream (alpha, 4 planes) | 282.5 fps (3.540 ms) | 177.2 fps (5.643 ms) | **187.6 fps (5.332 ms)** | 1.06× | GPU (wgpu) |
+| 1080p | natural | OMT_SQ — Medium (80) | Encode, BGRA texture → bitstream (opaque, 3 planes) | 360.0 fps (2.778 ms) | — | 272.8 fps (3.665 ms) | 0.76× vs host pixels | — |
+| 1080p | natural | OMT_HQ — High (80) | Decode → BGRA texture | 687.9 fps (1.454 ms) | 330.0 fps (3.031 ms) | **558.0 fps (1.792 ms)** | 1.69× | GPU (wgpu) |
+| 1080p | natural | OMT_HQ — High (80) | Preview (1/8) → texture | 1324.1 fps (0.755 ms) | **1270.6 fps (0.787 ms)** | 1138.3 fps (0.878 ms) | 0.90× | CPU + texture transfer |
+| 1080p | natural | OMT_HQ — High (80) | Encode, BGRA texture → bitstream (alpha, 4 planes) | 282.8 fps (3.536 ms) | 178.9 fps (5.590 ms) | **187.0 fps (5.348 ms)** | 1.05× | GPU (wgpu) |
+| 1080p | natural | OMT_HQ — High (80) | Encode, BGRA texture → bitstream (opaque, 3 planes) | 361.3 fps (2.768 ms) | — | 273.1 fps (3.661 ms) | 0.76× vs host pixels | — |
+| 1080p | bars | OMT_LQ — Low (80) | Decode → BGRA texture | 860.0 fps (1.163 ms) | 364.3 fps (2.745 ms) | **648.7 fps (1.542 ms)** | 1.78× | GPU (wgpu) |
+| 1080p | bars | OMT_LQ — Low (80) | Preview (1/8) → texture | 3523.8 fps (0.284 ms) | **3234.1 fps (0.309 ms)** | 2493.3 fps (0.401 ms) | 0.77× | CPU + texture transfer |
+| 1080p | bars | OMT_LQ — Low (80) | Encode, BGRA texture → bitstream (alpha, 4 planes) | 297.5 fps (3.361 ms) | 185.5 fps (5.390 ms) | **192.4 fps (5.197 ms)** | 1.04× | GPU (wgpu) |
+| 1080p | bars | OMT_LQ — Low (80) | Encode, BGRA texture → bitstream (opaque, 3 planes) | 378.5 fps (2.642 ms) | — | 280.2 fps (3.568 ms) | 0.74× vs host pixels | — |
+| 1080p | bars | OMT_SQ — Medium (80) | Decode → BGRA texture | 857.4 fps (1.166 ms) | 366.6 fps (2.727 ms) | **650.9 fps (1.536 ms)** | 1.78× | GPU (wgpu) |
+| 1080p | bars | OMT_SQ — Medium (80) | Preview (1/8) → texture | 3494.4 fps (0.286 ms) | **3220.3 fps (0.311 ms)** | 2649.4 fps (0.377 ms) | 0.82× | CPU + texture transfer |
+| 1080p | bars | OMT_SQ — Medium (80) | Encode, BGRA texture → bitstream (alpha, 4 planes) | 294.8 fps (3.392 ms) | 182.4 fps (5.483 ms) | **192.3 fps (5.200 ms)** | 1.05× | GPU (wgpu) |
+| 1080p | bars | OMT_SQ — Medium (80) | Encode, BGRA texture → bitstream (opaque, 3 planes) | 381.0 fps (2.624 ms) | — | 282.3 fps (3.542 ms) | 0.74× vs host pixels | — |
+| 1080p | bars | OMT_HQ — High (80) | Decode → BGRA texture | 851.4 fps (1.175 ms) | 366.4 fps (2.729 ms) | **653.5 fps (1.530 ms)** | 1.78× | GPU (wgpu) |
+| 1080p | bars | OMT_HQ — High (80) | Preview (1/8) → texture | 3504.9 fps (0.285 ms) | **3218.2 fps (0.311 ms)** | 2501.3 fps (0.400 ms) | 0.78× | CPU + texture transfer |
+| 1080p | bars | OMT_HQ — High (80) | Encode, BGRA texture → bitstream (alpha, 4 planes) | 297.6 fps (3.361 ms) | 184.3 fps (5.425 ms) | **193.2 fps (5.176 ms)** | 1.05× | GPU (wgpu) |
+| 1080p | bars | OMT_HQ — High (80) | Encode, BGRA texture → bitstream (opaque, 3 planes) | 383.9 fps (2.605 ms) | — | 282.7 fps (3.537 ms) | 0.74× vs host pixels | — |
+| 2160p | natural | OMT_LQ — Low (80) | Decode → BGRA texture | 185.5 fps (5.390 ms) | 24.4 fps ✗ (40.914 ms) | **172.4 fps (5.800 ms)** | 7.07× † | GPU (wgpu) |
+| 2160p | natural | OMT_LQ — Low (80) | Preview (1/8) → texture | 376.7 fps (2.655 ms) | **365.6 fps (2.735 ms)** | 353.7 fps (2.827 ms) | 0.97× | CPU + texture transfer |
+| 2160p | natural | OMT_LQ — Low (80) | Encode, BGRA texture → bitstream (alpha, 4 planes) | 72.0 fps (13.890 ms) | 39.7 fps ✗ (25.196 ms) | **48.9 fps ✗ (20.442 ms)** | 1.23× | GPU (wgpu) |
+| 2160p | natural | OMT_LQ — Low (80) | Encode, BGRA texture → bitstream (opaque, 3 planes) | 91.7 fps (10.900 ms) | — | 71.5 fps (13.979 ms) | 0.78× vs host pixels | — |
+| 2160p | natural | OMT_SQ — Medium (80) | Decode → BGRA texture | 187.5 fps (5.333 ms) | 84.8 fps (11.790 ms) | **170.2 fps (5.875 ms)** | 2.01× | GPU (wgpu) |
+| 2160p | natural | OMT_SQ — Medium (80) | Preview (1/8) → texture | 375.5 fps (2.663 ms) | **364.8 fps (2.742 ms)** | 350.7 fps (2.852 ms) | 0.96× | CPU + texture transfer |
+| 2160p | natural | OMT_SQ — Medium (80) | Encode, BGRA texture → bitstream (alpha, 4 planes) | 71.5 fps (13.984 ms) | 38.7 fps ✗ (25.841 ms) | **48.8 fps ✗ (20.484 ms)** | 1.26× | GPU (wgpu) |
+| 2160p | natural | OMT_SQ — Medium (80) | Encode, BGRA texture → bitstream (opaque, 3 planes) | 91.6 fps (10.912 ms) | — | 71.5 fps (13.982 ms) | 0.78× vs host pixels | — |
+| 2160p | natural | OMT_HQ — High (80) | Decode → BGRA texture | 178.1 fps (5.614 ms) | 83.1 fps (12.029 ms) | **164.4 fps (6.081 ms)** | 1.98× | GPU (wgpu) |
+| 2160p | natural | OMT_HQ — High (80) | Preview (1/8) → texture | 341.4 fps (2.929 ms) | **326.0 fps (3.067 ms)** | 320.1 fps (3.124 ms) | 0.98× | CPU + texture transfer |
+| 2160p | natural | OMT_HQ — High (80) | Encode, BGRA texture → bitstream (alpha, 4 planes) | 71.9 fps (13.918 ms) | 38.4 fps ✗ (26.071 ms) | **48.9 fps ✗ (20.430 ms)** | 1.27× | GPU (wgpu) |
+| 2160p | natural | OMT_HQ — High (80) | Encode, BGRA texture → bitstream (opaque, 3 planes) | 92.2 fps (10.844 ms) | — | 71.5 fps (13.989 ms) | 0.78× vs host pixels | — |
+| 2160p | bars | OMT_LQ — Low (80) | Decode → BGRA texture | 213.5 fps (4.684 ms) | 89.5 fps (11.171 ms) | **192.9 fps (5.184 ms)** | 2.16× | GPU (wgpu) |
+| 2160p | bars | OMT_LQ — Low (80) | Preview (1/8) → texture | 875.7 fps (1.142 ms) | **816.3 fps (1.225 ms)** | 760.6 fps (1.315 ms) | 0.93× | CPU + texture transfer |
+| 2160p | bars | OMT_LQ — Low (80) | Encode, BGRA texture → bitstream (alpha, 4 planes) | 74.4 fps (13.443 ms) | 39.2 fps ✗ (25.511 ms) | **49.9 fps ✗ (20.052 ms)** | 1.27× | GPU (wgpu) |
+| 2160p | bars | OMT_LQ — Low (80) | Encode, BGRA texture → bitstream (opaque, 3 planes) | 95.6 fps (10.464 ms) | — | 73.7 fps (13.577 ms) | 0.77× vs host pixels | — |
+| 2160p | bars | OMT_SQ — Medium (80) | Decode → BGRA texture | 212.7 fps (4.701 ms) | 90.1 fps (11.097 ms) | **192.8 fps (5.186 ms)** | 2.14× | GPU (wgpu) |
+| 2160p | bars | OMT_SQ — Medium (80) | Preview (1/8) → texture | 841.1 fps (1.189 ms) | **807.6 fps (1.238 ms)** | 750.8 fps (1.332 ms) | 0.93× | CPU + texture transfer |
+| 2160p | bars | OMT_SQ — Medium (80) | Encode, BGRA texture → bitstream (alpha, 4 planes) | 74.3 fps (13.462 ms) | 40.3 fps ✗ (24.825 ms) | **49.8 fps ✗ (20.080 ms)** | 1.24× | GPU (wgpu) |
+| 2160p | bars | OMT_SQ — Medium (80) | Encode, BGRA texture → bitstream (opaque, 3 planes) | 95.3 fps (10.490 ms) | — | 73.8 fps (13.548 ms) | 0.77× vs host pixels | — |
+| 2160p | bars | OMT_HQ — High (80) | Decode → BGRA texture | 211.4 fps (4.730 ms) | 90.2 fps (11.091 ms) | **192.8 fps (5.187 ms)** | 2.14× | GPU (wgpu) |
+| 2160p | bars | OMT_HQ — High (80) | Preview (1/8) → texture | 866.4 fps (1.154 ms) | **813.6 fps (1.229 ms)** | 754.6 fps (1.325 ms) | 0.93× | CPU + texture transfer |
+| 2160p | bars | OMT_HQ — High (80) | Encode, BGRA texture → bitstream (alpha, 4 planes) | 74.1 fps (13.497 ms) | 39.9 fps ✗ (25.084 ms) | **49.8 fps ✗ (20.076 ms)** | 1.25× | GPU (wgpu) |
+| 2160p | bars | OMT_HQ — High (80) | Encode, BGRA texture → bitstream (opaque, 3 planes) | 95.4 fps (10.485 ms) | — | 73.5 fps (13.609 ms) | 0.77× vs host pixels | — |
+
+GPU preview and GPU encode match the CPU path on all 12 image × profile cells (PSNR 100 dB, max abs 0). GPU decode matches on every `bars` cell. `natural` decode does not:
+
+| Resolution | Profile | PSNR | MAE | max abs |
+| --- | --- | ---: | ---: | ---: |
+| 1080p | OMT_LQ — Low (80) | 56.08 dB | 0.02 | 30 |
+| 1080p | OMT_SQ — Medium (80) | 50.79 dB | 0.25 | 30 |
+| 1080p | OMT_HQ — High (80) | 50.79 dB | 0.25 | 30 |
+| 2160p | OMT_LQ — Low (80) | 59.50 dB | 0.01 | 35 |
+| 2160p | OMT_SQ — Medium (80) | 59.50 dB | 0.01 | 35 |
+| 2160p | OMT_HQ — High (80) | 52.12 dB | 0.21 | 35 |
+
+Encode does colour conversion, FDCT, and quantisation on the GPU; Golomb coding stays on the CPU. Preview is the CPU `decode_preview_bgra` plus `queue.write_texture`.
+
+Reference, not the table above: an earlier `OMT_SQ` synthetic gradient, filled in memory (`blue = x % 256`, `green = y % 256`, `red = 128`, `alpha = 255`; not a file under `bench/images/`), is in [`bench/results/gcp-gpu-l4.csv`](bench/results/gcp-gpu-l4.csv). GPU decode there was 1.70× the CPU-plus-transfer path at 1080p and 1.67× at 2160p. The first attempt on that VM did not see the L4 (`libGLX_nvidia.so.0` failed to load, and wgpu used llvmpipe). `libnvidia-gl-580-server` and `libegl1` made the discrete GPU visible. The image table is the L4 run, not the llvmpipe pass.
+
+`examples/gpu_bench.rs` now discards `--prime` untimed iterations of each GPU path before timing (default 20, `GPU_BENCH_PRIME` in [`bench/scripts/run_gpu.sh`](bench/scripts/run_gpu.sh)). The medians above were taken before that prime existed.
 
 ## Earlier shared-runner results
 
@@ -303,4 +360,4 @@ cd bench
 cargo run --release > results.csv
 ```
 
-`clang++`, `git`, and `ar` are required. Filters: `--res 1080`, `--prof OMT_HQ`, `--img natural`, `--threads 1`. [`bench/scripts/run_omt.sh`](bench/scripts/run_omt.sh) is the resume script from the GCP OMT-only pass. [`bench/scripts/make_tables.py`](bench/scripts/make_tables.py) turns a harness CSV into the table shape used above.
+`clang++`, `git`, and `ar` are required. Filters: `--res 1080`, `--prof OMT_HQ`, `--img natural`, `--threads 1`. [`bench/scripts/run_omt.sh`](bench/scripts/run_omt.sh) is the resume script from the GCP OMT-only pass. [`bench/scripts/make_tables.py`](bench/scripts/make_tables.py) turns a harness CSV into the table shape used above. The L4 image pass is [`bench/scripts/run_gpu.sh`](bench/scripts/run_gpu.sh) (`OUT=/tmp/gpu.csv GPU_BENCH_ITERS=20`).

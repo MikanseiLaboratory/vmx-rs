@@ -2,7 +2,7 @@
 
 CPU numbers below are from dedicated GCP Spot VMs in Tokyo (`asia-northeast1`) on 2026-11-20. They replace the earlier shared-VM and GitHub Actions tables as the primary result. Each table is one pass. A gap of a few percent is one sample, not a settled ordering.
 
-Fps columns, left to right, are libvmx (official), vmx-codec (Saul), and vmx. The x86-64 tables insert libvmx 128-bit after the AVX2 column. **Bold** is the fastest median on that row (a tie bolds each tied value). In the ratio tables, the same rule uses the geometric mean of fps over the rows in that line: the 最速 column names the winner (`libvmx`, `libvmx 128-bit`, `vmx-codec`, or `vmx`), and the winner's ratio cell is bold when that winner is vmx or vmx-codec. libvmx's ratio is 1 and is not printed. The profile cell is the OMT name, the sender's quality name, and the fixed q, as in `OMT_HQ — High (96)`. `✗` is a median below 60 fps.
+Fps columns, left to right, are libvmx (official), vmx-codec (Saul), and vmx. The x86-64 tables insert libvmx 128-bit after the AVX2 column. Every comparison table ends with a Fastest column naming the winner on that row (`libvmx`, `libvmx 128-bit`, `vmx-codec`, `vmx`, or, in the wgpu table, the path name). **Bold** is that winner's value; a tie bolds each tied value and lists every name. In the fps tables the winner is the highest median. In the ratio tables the winner is the highest geometric mean of fps over the rows in that line; libvmx's ratio is 1 and is not printed, and the winner's ratio cell is bold when the winner is vmx or vmx-codec. The profile cell is the OMT name, the sender's quality name, and the fixed q, as in `OMT_HQ — High (96)`. `✗` is a median below 60 fps.
 
 | Implementation | Commit / version | What was timed |
 |---|---|---|
@@ -79,16 +79,16 @@ Geometric mean of `median / libvmx` over the 12 rows of that operation and threa
 
 ### c4-standard-8 (4 cores, SMT)
 
-| Operation | Threads | vmx / libvmx | vmx-codec / libvmx | 最速 |
+| Operation | Threads | vmx / libvmx | vmx-codec / libvmx | Fastest |
 |---|---:|---:|---:|---|
 | Encode | 1 | 0.75 (0.68–0.82) | 0.38 (0.32–0.46) | libvmx |
 | Encode | 8 | **1.09 (0.97–1.28)** | 0.32 (0.25–0.42) | vmx |
 | Decode | 1 | 0.73 (0.55–1.00) | 0.52 (0.43–0.63) | libvmx |
 | Decode | 8 | **1.03 (0.75–1.43)** | 0.33 (0.18–0.60) | vmx |
 
-vmx / libvmx by image. 最速 is still over every implementation, so a bold ratio means vmx is ahead of libvmx, vmx-codec, and, on x86-64, libvmx 128-bit.
+vmx / libvmx by image. Fastest is still over every implementation, so a bold ratio means vmx is ahead of libvmx, vmx-codec, and, on x86-64, libvmx 128-bit.
 
-| Operation | Threads | natural | bars | 最速 (natural) | 最速 (bars) |
+| Operation | Threads | natural | bars | Fastest (natural) | Fastest (bars) |
 |---|---:|---:|---:|---|---|
 | Encode | 1 | 0.75 (0.68–0.82) | 0.74 (0.74–0.75) | libvmx | libvmx |
 | Encode | 8 | **1.16 (1.02–1.28)** | **1.03 (0.97–1.08)** | vmx | vmx |
@@ -99,7 +99,7 @@ Eight threads here share four cores. The 8-thread encode mean of 1.09 is much cl
 
 ### c4a-standard-8 (8 cores)
 
-| Operation | Threads | vmx / libvmx | vmx-codec / libvmx | 最速 |
+| Operation | Threads | vmx / libvmx | vmx-codec / libvmx | Fastest |
 |---|---:|---:|---:|---|
 | Encode | 1 | 0.94 (0.93–0.97) | **1.07 (1.05–1.09)** | vmx-codec |
 | Encode | 8 | **1.85 (1.76–1.94)** | 1.66 (1.59–1.79) | vmx |
@@ -108,7 +108,7 @@ Eight threads here share four cores. The 8-thread encode mean of 1.09 is much cl
 
 vmx / libvmx by image:
 
-| Operation | Threads | natural | bars | 最速 (natural) | 最速 (bars) |
+| Operation | Threads | natural | bars | Fastest (natural) | Fastest (bars) |
 |---|---:|---:|---:|---|---|
 | Encode | 1 | 0.95 (0.93–0.97) | 0.93 (0.93–0.93) | vmx-codec | vmx-codec |
 | Encode | 8 | **1.82 (1.76–1.90)** | **1.87 (1.78–1.94)** | vmx | vmx |
@@ -121,162 +121,164 @@ The 1-thread encode ratios sit in a band of a few percent. The within-run spread
 
 Xeon Platinum 8581C, 4 cores / 8 threads. 192 rows, all byte-identical to libvmx 128-bit. CSV: [`bench/results/gcp-x86-c4.csv`](bench/results/gcp-x86-c4.csv).
 
+
 ### Encode, 1 thread
 
-| Resolution | Profile | Image | bytes/frame | libvmx | libvmx 128-bit | vmx-codec | vmx |
-| --- | --- | --- | ---: | ---: | ---: | ---: | ---: |
-| 1080p | OMT_LQ — Low (92) | natural | 168,577 | **451** | 305 | 194 | 353 |
-| 1080p | OMT_SQ — Medium (95) | natural | 418,883 | **360** | 238 | 160 | 247 |
-| 1080p | OMT_HQ — High (96) | natural | 559,463 | **307** | 206 | 140 | 208 |
-| 1080p | OMT_LQ — Low (98) | bars | 22,008 | **703** | 440 | 232 | 523 |
-| 1080p | OMT_SQ — Medium (98) | bars | 24,303 | **712** | 440 | 231 | 524 |
-| 1080p | OMT_HQ — High (98) | bars | 24,303 | **706** | 439 | 230 | 523 |
-| 2160p | OMT_LQ — Low (92) | natural | 595,921 | **111** | 79 | 50 ✗ | 90 |
-| 2160p | OMT_SQ — Medium (92) | natural | 595,921 | **111** | 79 | 49 ✗ | 91 |
-| 2160p | OMT_HQ — High (94) | natural | 1,192,159 | **103** | 69 | 45 ✗ | 74 |
-| 2160p | OMT_LQ — Low (98) | bars | 76,145 | **174** | 111 | 59 ✗ | 131 |
-| 2160p | OMT_SQ — Medium (98) | bars | 76,145 | **176** | 111 | 58 ✗ | 131 |
-| 2160p | OMT_HQ — High (98) | bars | 80,733 | **175** | 111 | 58 ✗ | 131 |
+| Resolution | Profile | Image | bytes/frame | libvmx | libvmx 128-bit | vmx-codec | vmx | Fastest |
+| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | --- |
+| 1080p | OMT_LQ — Low (92) | natural | 168,577 | **451** | 305 | 194 | 353 | libvmx |
+| 1080p | OMT_SQ — Medium (95) | natural | 418,883 | **360** | 238 | 160 | 247 | libvmx |
+| 1080p | OMT_HQ — High (96) | natural | 559,463 | **307** | 206 | 140 | 208 | libvmx |
+| 1080p | OMT_LQ — Low (98) | bars | 22,008 | **703** | 440 | 232 | 523 | libvmx |
+| 1080p | OMT_SQ — Medium (98) | bars | 24,303 | **712** | 440 | 231 | 524 | libvmx |
+| 1080p | OMT_HQ — High (98) | bars | 24,303 | **706** | 439 | 230 | 523 | libvmx |
+| 2160p | OMT_LQ — Low (92) | natural | 595,921 | **111** | 79 | 50 ✗ | 90 | libvmx |
+| 2160p | OMT_SQ — Medium (92) | natural | 595,921 | **111** | 79 | 49 ✗ | 91 | libvmx |
+| 2160p | OMT_HQ — High (94) | natural | 1,192,159 | **103** | 69 | 45 ✗ | 74 | libvmx |
+| 2160p | OMT_LQ — Low (98) | bars | 76,145 | **174** | 111 | 59 ✗ | 131 | libvmx |
+| 2160p | OMT_SQ — Medium (98) | bars | 76,145 | **176** | 111 | 58 ✗ | 131 | libvmx |
+| 2160p | OMT_HQ — High (98) | bars | 80,733 | **175** | 111 | 58 ✗ | 131 | libvmx |
 
 ### Encode, 8 threads
 
-| Resolution | Profile | Image | bytes/frame | libvmx | libvmx 128-bit | vmx-codec | vmx |
-| --- | --- | --- | ---: | ---: | ---: | ---: | ---: |
-| 1080p | OMT_LQ — Low (92) | natural | 168,577 | 1409 | 957 | 488 | **1657** |
-| 1080p | OMT_SQ — Medium (95) | natural | 418,883 | 1152 | 801 | 433 | **1179** |
-| 1080p | OMT_HQ — High (96) | natural | 559,463 | 950 | 692 | 398 | **1010** |
-| 1080p | OMT_LQ — Low (98) | bars | 22,008 | 2130 | 1364 | 544 | **2160** |
-| 1080p | OMT_SQ — Medium (98) | bars | 24,303 | **2158** | 1343 | 531 | 2104 |
-| 1080p | OMT_HQ — High (98) | bars | 24,303 | 2100 | 1304 | 543 | **2132** |
-| 2160p | OMT_LQ — Low (92) | natural | 595,921 | 353 | 269 | 138 | **453** |
-| 2160p | OMT_SQ — Medium (92) | natural | 595,921 | 356 | 255 | 140 | **454** |
-| 2160p | OMT_HQ — High (94) | natural | 1,192,159 | 328 | 237 | 131 | **377** |
-| 2160p | OMT_LQ — Low (98) | bars | 76,145 | 517 | 344 | 153 | **560** |
-| 2160p | OMT_SQ — Medium (98) | bars | 76,145 | 538 | 351 | 150 | **562** |
-| 2160p | OMT_HQ — High (98) | bars | 80,733 | 533 | 338 | 152 | **566** |
+| Resolution | Profile | Image | bytes/frame | libvmx | libvmx 128-bit | vmx-codec | vmx | Fastest |
+| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | --- |
+| 1080p | OMT_LQ — Low (92) | natural | 168,577 | 1409 | 957 | 488 | **1657** | vmx |
+| 1080p | OMT_SQ — Medium (95) | natural | 418,883 | 1152 | 801 | 433 | **1179** | vmx |
+| 1080p | OMT_HQ — High (96) | natural | 559,463 | 950 | 692 | 398 | **1010** | vmx |
+| 1080p | OMT_LQ — Low (98) | bars | 22,008 | 2130 | 1364 | 544 | **2160** | vmx |
+| 1080p | OMT_SQ — Medium (98) | bars | 24,303 | **2158** | 1343 | 531 | 2104 | libvmx |
+| 1080p | OMT_HQ — High (98) | bars | 24,303 | 2100 | 1304 | 543 | **2132** | vmx |
+| 2160p | OMT_LQ — Low (92) | natural | 595,921 | 353 | 269 | 138 | **453** | vmx |
+| 2160p | OMT_SQ — Medium (92) | natural | 595,921 | 356 | 255 | 140 | **454** | vmx |
+| 2160p | OMT_HQ — High (94) | natural | 1,192,159 | 328 | 237 | 131 | **377** | vmx |
+| 2160p | OMT_LQ — Low (98) | bars | 76,145 | 517 | 344 | 153 | **560** | vmx |
+| 2160p | OMT_SQ — Medium (98) | bars | 76,145 | 538 | 351 | 150 | **562** | vmx |
+| 2160p | OMT_HQ — High (98) | bars | 80,733 | 533 | 338 | 152 | **566** | vmx |
 
 ### Decode, 1 thread
 
-| Resolution | Profile | Image | bytes/frame | libvmx | libvmx 128-bit | vmx-codec | vmx |
-| --- | --- | --- | ---: | ---: | ---: | ---: | ---: |
-| 1080p | OMT_LQ — Low (92) | natural | 168,577 | **488** | 416 | 306 | 426 |
-| 1080p | OMT_SQ — Medium (95) | natural | 418,883 | **274** | 240 | 164 | 262 |
-| 1080p | OMT_HQ — High (96) | natural | 559,463 | **215** | 190 | 122 | 214 |
-| 1080p | OMT_LQ — Low (98) | bars | 22,008 | 1861 | **1933** | 826 | 1159 |
-| 1080p | OMT_SQ — Medium (98) | bars | 24,303 | 1853 | **1996** | 826 | 1116 |
-| 1080p | OMT_HQ — High (98) | bars | 24,303 | 1880 | **1997** | 812 | 1090 |
-| 2160p | OMT_LQ — Low (92) | natural | 595,921 | **132** | 114 | 83 | 114 |
-| 2160p | OMT_SQ — Medium (92) | natural | 595,921 | **132** | 115 | 82 | 113 |
-| 2160p | OMT_HQ — High (94) | natural | 1,192,159 | **92** | 80 | 56 ✗ | 83 |
-| 2160p | OMT_LQ — Low (98) | bars | 76,145 | 498 | **552** | 238 | 293 |
-| 2160p | OMT_SQ — Medium (98) | bars | 76,145 | 514 | **558** | 237 | 292 |
-| 2160p | OMT_HQ — High (98) | bars | 80,733 | 511 | **557** | 232 | 283 |
+| Resolution | Profile | Image | bytes/frame | libvmx | libvmx 128-bit | vmx-codec | vmx | Fastest |
+| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | --- |
+| 1080p | OMT_LQ — Low (92) | natural | 168,577 | **488** | 416 | 306 | 426 | libvmx |
+| 1080p | OMT_SQ — Medium (95) | natural | 418,883 | **274** | 240 | 164 | 262 | libvmx |
+| 1080p | OMT_HQ — High (96) | natural | 559,463 | **215** | 190 | 122 | 214 | libvmx |
+| 1080p | OMT_LQ — Low (98) | bars | 22,008 | 1861 | **1933** | 826 | 1159 | libvmx 128-bit |
+| 1080p | OMT_SQ — Medium (98) | bars | 24,303 | 1853 | **1996** | 826 | 1116 | libvmx 128-bit |
+| 1080p | OMT_HQ — High (98) | bars | 24,303 | 1880 | **1997** | 812 | 1090 | libvmx 128-bit |
+| 2160p | OMT_LQ — Low (92) | natural | 595,921 | **132** | 114 | 83 | 114 | libvmx |
+| 2160p | OMT_SQ — Medium (92) | natural | 595,921 | **132** | 115 | 82 | 113 | libvmx |
+| 2160p | OMT_HQ — High (94) | natural | 1,192,159 | **92** | 80 | 56 ✗ | 83 | libvmx |
+| 2160p | OMT_LQ — Low (98) | bars | 76,145 | 498 | **552** | 238 | 293 | libvmx 128-bit |
+| 2160p | OMT_SQ — Medium (98) | bars | 76,145 | 514 | **558** | 237 | 292 | libvmx 128-bit |
+| 2160p | OMT_HQ — High (98) | bars | 80,733 | 511 | **557** | 232 | 283 | libvmx 128-bit |
 
 ### Decode, 8 threads
 
-| Resolution | Profile | Image | bytes/frame | libvmx | libvmx 128-bit | vmx-codec | vmx |
-| --- | --- | --- | ---: | ---: | ---: | ---: | ---: |
-| 1080p | OMT_LQ — Low (92) | natural | 168,577 | 1538 | 1284 | 743 | **1832** |
-| 1080p | OMT_SQ — Medium (95) | natural | 418,883 | 915 | 783 | 506 | **1237** |
-| 1080p | OMT_HQ — High (96) | natural | 559,463 | 728 | 637 | 425 | **1042** |
-| 1080p | OMT_LQ — Low (98) | bars | 22,008 | 4940 | **5265** | 952 | 4055 |
-| 1080p | OMT_SQ — Medium (98) | bars | 24,303 | **5063** | 4843 | 936 | 3787 |
-| 1080p | OMT_HQ — High (98) | bars | 24,303 | 4745 | **5117** | 957 | 3865 |
-| 2160p | OMT_LQ — Low (92) | natural | 595,921 | 441 | 401 | 223 | **557** |
-| 2160p | OMT_SQ — Medium (92) | natural | 595,921 | 451 | 373 | 220 | **567** |
-| 2160p | OMT_HQ — High (94) | natural | 1,192,159 | 308 | 264 | 184 | **427** |
-| 2160p | OMT_LQ — Low (98) | bars | 76,145 | 1483 | **1585** | 323 | 1230 |
-| 2160p | OMT_SQ — Medium (98) | bars | 76,145 | 1520 | **1592** | 318 | 1238 |
-| 2160p | OMT_HQ — High (98) | bars | 80,733 | 1420 | **1615** | 324 | 1227 |
+| Resolution | Profile | Image | bytes/frame | libvmx | libvmx 128-bit | vmx-codec | vmx | Fastest |
+| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | --- |
+| 1080p | OMT_LQ — Low (92) | natural | 168,577 | 1538 | 1284 | 743 | **1832** | vmx |
+| 1080p | OMT_SQ — Medium (95) | natural | 418,883 | 915 | 783 | 506 | **1237** | vmx |
+| 1080p | OMT_HQ — High (96) | natural | 559,463 | 728 | 637 | 425 | **1042** | vmx |
+| 1080p | OMT_LQ — Low (98) | bars | 22,008 | 4940 | **5265** | 952 | 4055 | libvmx 128-bit |
+| 1080p | OMT_SQ — Medium (98) | bars | 24,303 | **5063** | 4843 | 936 | 3787 | libvmx |
+| 1080p | OMT_HQ — High (98) | bars | 24,303 | 4745 | **5117** | 957 | 3865 | libvmx 128-bit |
+| 2160p | OMT_LQ — Low (92) | natural | 595,921 | 441 | 401 | 223 | **557** | vmx |
+| 2160p | OMT_SQ — Medium (92) | natural | 595,921 | 451 | 373 | 220 | **567** | vmx |
+| 2160p | OMT_HQ — High (94) | natural | 1,192,159 | 308 | 264 | 184 | **427** | vmx |
+| 2160p | OMT_LQ — Low (98) | bars | 76,145 | 1483 | **1585** | 323 | 1230 | libvmx 128-bit |
+| 2160p | OMT_SQ — Medium (98) | bars | 76,145 | 1520 | **1592** | 318 | 1238 | libvmx 128-bit |
+| 2160p | OMT_HQ — High (98) | bars | 80,733 | 1420 | **1615** | 324 | 1227 | libvmx 128-bit |
 
 ## ARM64 — c4a-standard-8
 
 Google Axion, Neoverse-V2, 8 cores. 144 rows, all byte-identical to libvmx 128-bit. One libvmx column (sse2neon). CSV: [`bench/results/gcp-arm-c4a.csv`](bench/results/gcp-arm-c4a.csv).
 
+
 ### Encode, 1 thread
 
-| Resolution | Profile | Image | bytes/frame | libvmx | vmx-codec | vmx |
-| --- | --- | --- | ---: | ---: | ---: | ---: |
-| 1080p | OMT_LQ — Low (92) | natural | 168,577 | 183 | **200** | 177 |
-| 1080p | OMT_SQ — Medium (95) | natural | 418,883 | 156 | **167** | 146 |
-| 1080p | OMT_HQ — High (96) | natural | 559,463 | 140 | **147** | 130 |
-| 1080p | OMT_LQ — Low (98) | bars | 22,008 | 230 | **243** | 215 |
-| 1080p | OMT_SQ — Medium (98) | bars | 24,303 | 230 | **245** | 214 |
-| 1080p | OMT_HQ — High (98) | bars | 24,303 | 230 | **244** | 214 |
-| 2160p | OMT_LQ — Low (92) | natural | 595,921 | 47 ✗ | **50 ✗** | 45 ✗ |
-| 2160p | OMT_SQ — Medium (92) | natural | 595,921 | 47 ✗ | **50 ✗** | 45 ✗ |
-| 2160p | OMT_HQ — High (94) | natural | 1,192,159 | 43 ✗ | **46 ✗** | 40 ✗ |
-| 2160p | OMT_LQ — Low (98) | bars | 76,145 | 58 ✗ | **61** | 54 ✗ |
-| 2160p | OMT_SQ — Medium (98) | bars | 76,145 | 58 ✗ | **62** | 54 ✗ |
-| 2160p | OMT_HQ — High (98) | bars | 80,733 | 58 ✗ | **61** | 54 ✗ |
+| Resolution | Profile | Image | bytes/frame | libvmx | vmx-codec | vmx | Fastest |
+| --- | --- | --- | ---: | ---: | ---: | ---: | --- |
+| 1080p | OMT_LQ — Low (92) | natural | 168,577 | 183 | **200** | 177 | vmx-codec |
+| 1080p | OMT_SQ — Medium (95) | natural | 418,883 | 156 | **167** | 146 | vmx-codec |
+| 1080p | OMT_HQ — High (96) | natural | 559,463 | 140 | **147** | 130 | vmx-codec |
+| 1080p | OMT_LQ — Low (98) | bars | 22,008 | 230 | **243** | 215 | vmx-codec |
+| 1080p | OMT_SQ — Medium (98) | bars | 24,303 | 230 | **245** | 214 | vmx-codec |
+| 1080p | OMT_HQ — High (98) | bars | 24,303 | 230 | **244** | 214 | vmx-codec |
+| 2160p | OMT_LQ — Low (92) | natural | 595,921 | 47 ✗ | **50 ✗** | 45 ✗ | vmx-codec |
+| 2160p | OMT_SQ — Medium (92) | natural | 595,921 | 47 ✗ | **50 ✗** | 45 ✗ | vmx-codec |
+| 2160p | OMT_HQ — High (94) | natural | 1,192,159 | 43 ✗ | **46 ✗** | 40 ✗ | vmx-codec |
+| 2160p | OMT_LQ — Low (98) | bars | 76,145 | 58 ✗ | **61** | 54 ✗ | vmx-codec |
+| 2160p | OMT_SQ — Medium (98) | bars | 76,145 | 58 ✗ | **62** | 54 ✗ | vmx-codec |
+| 2160p | OMT_HQ — High (98) | bars | 80,733 | 58 ✗ | **61** | 54 ✗ | vmx-codec |
 
 ### Encode, 8 threads
 
-| Resolution | Profile | Image | bytes/frame | libvmx | vmx-codec | vmx |
-| --- | --- | --- | ---: | ---: | ---: | ---: |
-| 1080p | OMT_LQ — Low (92) | natural | 168,577 | 710 | 1132 | **1282** |
-| 1080p | OMT_SQ — Medium (95) | natural | 418,883 | 571 | 976 | **1056** |
-| 1080p | OMT_HQ — High (96) | natural | 559,463 | 505 | 874 | **940** |
-| 1080p | OMT_LQ — Low (98) | bars | 22,008 | 805 | 1309 | **1543** |
-| 1080p | OMT_SQ — Medium (98) | bars | 24,303 | 814 | 1321 | **1542** |
-| 1080p | OMT_HQ — High (98) | bars | 24,303 | 797 | 1308 | **1548** |
-| 2160p | OMT_LQ — Low (92) | natural | 595,921 | 198 | 320 | **350** |
-| 2160p | OMT_SQ — Medium (92) | natural | 595,921 | 198 | 318 | **350** |
-| 2160p | OMT_HQ — High (94) | natural | 1,192,159 | 164 | 295 | **312** |
-| 2160p | OMT_LQ — Low (98) | bars | 76,145 | 231 | 385 | **420** |
-| 2160p | OMT_SQ — Medium (98) | bars | 76,145 | 237 | 383 | **421** |
-| 2160p | OMT_HQ — High (98) | bars | 80,733 | 226 | 384 | **419** |
+| Resolution | Profile | Image | bytes/frame | libvmx | vmx-codec | vmx | Fastest |
+| --- | --- | --- | ---: | ---: | ---: | ---: | --- |
+| 1080p | OMT_LQ — Low (92) | natural | 168,577 | 710 | 1132 | **1282** | vmx |
+| 1080p | OMT_SQ — Medium (95) | natural | 418,883 | 571 | 976 | **1056** | vmx |
+| 1080p | OMT_HQ — High (96) | natural | 559,463 | 505 | 874 | **940** | vmx |
+| 1080p | OMT_LQ — Low (98) | bars | 22,008 | 805 | 1309 | **1543** | vmx |
+| 1080p | OMT_SQ — Medium (98) | bars | 24,303 | 814 | 1321 | **1542** | vmx |
+| 1080p | OMT_HQ — High (98) | bars | 24,303 | 797 | 1308 | **1548** | vmx |
+| 2160p | OMT_LQ — Low (92) | natural | 595,921 | 198 | 320 | **350** | vmx |
+| 2160p | OMT_SQ — Medium (92) | natural | 595,921 | 198 | 318 | **350** | vmx |
+| 2160p | OMT_HQ — High (94) | natural | 1,192,159 | 164 | 295 | **312** | vmx |
+| 2160p | OMT_LQ — Low (98) | bars | 76,145 | 231 | 385 | **420** | vmx |
+| 2160p | OMT_SQ — Medium (98) | bars | 76,145 | 237 | 383 | **421** | vmx |
+| 2160p | OMT_HQ — High (98) | bars | 80,733 | 226 | 384 | **419** | vmx |
 
 ### Decode, 1 thread
 
-| Resolution | Profile | Image | bytes/frame | libvmx | vmx-codec | vmx |
-| --- | --- | --- | ---: | ---: | ---: | ---: |
-| 1080p | OMT_LQ — Low (92) | natural | 168,577 | **315** | 306 | 246 |
-| 1080p | OMT_SQ — Medium (95) | natural | 418,883 | **191** | 173 | 155 |
-| 1080p | OMT_HQ — High (96) | natural | 559,463 | **153** | 132 | 128 |
-| 1080p | OMT_LQ — Low (98) | bars | 22,008 | **2135** | 1353 | 1518 |
-| 1080p | OMT_SQ — Medium (98) | bars | 24,303 | **2197** | 1405 | 1499 |
-| 1080p | OMT_HQ — High (98) | bars | 24,303 | **2196** | 1368 | 1512 |
-| 2160p | OMT_LQ — Low (92) | natural | 595,921 | **86** | 82 | 67 |
-| 2160p | OMT_SQ — Medium (92) | natural | 595,921 | **86** | 82 | 66 |
-| 2160p | OMT_HQ — High (94) | natural | 1,192,159 | **62** | 58 ✗ | 50 ✗ |
-| 2160p | OMT_LQ — Low (98) | bars | 76,145 | **574** | 345 | 380 |
-| 2160p | OMT_SQ — Medium (98) | bars | 76,145 | **578** | 351 | 389 |
-| 2160p | OMT_HQ — High (98) | bars | 80,733 | **577** | 345 | 379 |
+| Resolution | Profile | Image | bytes/frame | libvmx | vmx-codec | vmx | Fastest |
+| --- | --- | --- | ---: | ---: | ---: | ---: | --- |
+| 1080p | OMT_LQ — Low (92) | natural | 168,577 | **315** | 306 | 246 | libvmx |
+| 1080p | OMT_SQ — Medium (95) | natural | 418,883 | **191** | 173 | 155 | libvmx |
+| 1080p | OMT_HQ — High (96) | natural | 559,463 | **153** | 132 | 128 | libvmx |
+| 1080p | OMT_LQ — Low (98) | bars | 22,008 | **2135** | 1353 | 1518 | libvmx |
+| 1080p | OMT_SQ — Medium (98) | bars | 24,303 | **2197** | 1405 | 1499 | libvmx |
+| 1080p | OMT_HQ — High (98) | bars | 24,303 | **2196** | 1368 | 1512 | libvmx |
+| 2160p | OMT_LQ — Low (92) | natural | 595,921 | **86** | 82 | 67 | libvmx |
+| 2160p | OMT_SQ — Medium (92) | natural | 595,921 | **86** | 82 | 66 | libvmx |
+| 2160p | OMT_HQ — High (94) | natural | 1,192,159 | **62** | 58 ✗ | 50 ✗ | libvmx |
+| 2160p | OMT_LQ — Low (98) | bars | 76,145 | **574** | 345 | 380 | libvmx |
+| 2160p | OMT_SQ — Medium (98) | bars | 76,145 | **578** | 351 | 389 | libvmx |
+| 2160p | OMT_HQ — High (98) | bars | 80,733 | **577** | 345 | 379 | libvmx |
 
 ### Decode, 8 threads
 
-| Resolution | Profile | Image | bytes/frame | libvmx | vmx-codec | vmx |
-| --- | --- | --- | ---: | ---: | ---: | ---: |
-| 1080p | OMT_LQ — Low (92) | natural | 168,577 | 1098 | 1423 | **1684** |
-| 1080p | OMT_SQ — Medium (95) | natural | 418,883 | 699 | 964 | **1096** |
-| 1080p | OMT_HQ — High (96) | natural | 559,463 | 561 | 786 | **907** |
-| 1080p | OMT_LQ — Low (98) | bars | 22,008 | 5646 | 2567 | **6716** |
-| 1080p | OMT_SQ — Medium (98) | bars | 24,303 | 5730 | 2600 | **6659** |
-| 1080p | OMT_HQ — High (98) | bars | 24,303 | 5639 | 2532 | **6668** |
-| 2160p | OMT_LQ — Low (92) | natural | 595,921 | 307 | 438 | **502** |
-| 2160p | OMT_SQ — Medium (92) | natural | 595,921 | 313 | 439 | **503** |
-| 2160p | OMT_HQ — High (94) | natural | 1,192,159 | 237 | 342 | **378** |
-| 2160p | OMT_LQ — Low (98) | bars | 76,145 | 1789 | 856 | **2280** |
-| 2160p | OMT_SQ — Medium (98) | bars | 76,145 | 1789 | 855 | **2290** |
-| 2160p | OMT_HQ — High (98) | bars | 80,733 | 1790 | 860 | **2288** |
+| Resolution | Profile | Image | bytes/frame | libvmx | vmx-codec | vmx | Fastest |
+| --- | --- | --- | ---: | ---: | ---: | ---: | --- |
+| 1080p | OMT_LQ — Low (92) | natural | 168,577 | 1098 | 1423 | **1684** | vmx |
+| 1080p | OMT_SQ — Medium (95) | natural | 418,883 | 699 | 964 | **1096** | vmx |
+| 1080p | OMT_HQ — High (96) | natural | 559,463 | 561 | 786 | **907** | vmx |
+| 1080p | OMT_LQ — Low (98) | bars | 22,008 | 5646 | 2567 | **6716** | vmx |
+| 1080p | OMT_SQ — Medium (98) | bars | 24,303 | 5730 | 2600 | **6659** | vmx |
+| 1080p | OMT_HQ — High (98) | bars | 24,303 | 5639 | 2532 | **6668** | vmx |
+| 2160p | OMT_LQ — Low (92) | natural | 595,921 | 307 | 438 | **502** | vmx |
+| 2160p | OMT_SQ — Medium (92) | natural | 595,921 | 313 | 439 | **503** | vmx |
+| 2160p | OMT_HQ — High (94) | natural | 1,192,159 | 237 | 342 | **378** | vmx |
+| 2160p | OMT_LQ — Low (98) | bars | 76,145 | 1789 | 856 | **2280** | vmx |
+| 2160p | OMT_SQ — Medium (98) | bars | 76,145 | 1789 | 855 | **2290** | vmx |
+| 2160p | OMT_HQ — High (98) | bars | 80,733 | 1790 | 860 | **2288** | vmx |
 
 ## wgpu — NVIDIA L4
 
 `g2-standard-4` with an L4, same Tokyo day. This is `examples/gpu_bench.rs` on `vmx` 0.2.1 with `--features wgpu`, not the three-implementation harness and not the `bench/images` frames. The picture is that example's synthetic BGRA gradient. The profile is OMT_SQ, which is the sender's default. Each figure is the median of three runs; a run is the median of 60 iterations at 1080p and 30 at 2160p. CSV: [`bench/results/gcp-gpu-l4.csv`](bench/results/gcp-gpu-l4.csv).
 
-The CPU columns are the same `vmx` build on this VM (4 vCPU, Cascade Lake, AVX2, all threads). **Bold** here is the faster of the GPU path and the CPU path that includes the texture transfer. That pair is the comparable one. The host-pixel column does not move a texture and is only a reference. The opaque encode has no CPU-plus-transfer measurement, so those two rows are not bolded.
+The CPU columns are the same `vmx` build on this VM (4 vCPU, Cascade Lake, AVX2, all threads). **Bold** and Fastest follow the same rule as the other tables: the highest fps on the row. The host-pixel column does not move a texture, so it is often the fastest number and is not the same workload as the GPU path. The GPU / CPU+transfer column is that pair's ratio, not another implementation. The opaque encode has no CPU-plus-transfer measurement.
 
-| Resolution | Operation | CPU, host pixels | CPU + texture transfer | GPU (wgpu) | GPU / CPU+transfer |
-| --- | --- | ---: | ---: | ---: | ---: |
-| 1080p | Decode → BGRA texture | 516 fps (1.94 ms) | 281 fps (3.55 ms) | **478 fps (2.09 ms)** | 1.70× |
-| 1080p | Preview (1/8) → texture | 1377 fps (0.73 ms) | **1328 fps (0.75 ms)** | 1190 fps (0.84 ms) | 0.90× |
-| 1080p | Encode, BGRA texture → bitstream (alpha, 4 planes) | 278 fps (3.60 ms) | 176 fps (5.69 ms) | **183 fps (5.45 ms)** | 1.04× |
-| 1080p | Encode, BGRA texture → bitstream (opaque, 3 planes) | 352 fps (2.84 ms) | — | 262 fps (3.82 ms) | 0.74× vs host pixels |
-| 2160p | Decode → BGRA texture | 131 fps (7.64 ms) | 71 fps (14.08 ms) | **118 fps (8.45 ms)** | 1.67× |
-| 2160p | Preview (1/8) → texture | 453 fps (2.21 ms) | **429 fps (2.33 ms)** | 419 fps (2.38 ms) | 0.98× |
-| 2160p | Encode, BGRA texture → bitstream (alpha, 4 planes) | 70 fps (14.28 ms) | 37 fps ✗ (26.70 ms) | **42 fps ✗ (23.99 ms)** | 1.11× |
-| 2160p | Encode, BGRA texture → bitstream (opaque, 3 planes) | 89 fps (11.28 ms) | — | 60 fps (16.64 ms) | 0.68× vs host pixels |
+| Resolution | Operation | CPU, host pixels | CPU + texture transfer | GPU (wgpu) | GPU / CPU+transfer | Fastest |
+| --- | --- | ---: | ---: | ---: | ---: | --- |
+| 1080p | Decode → BGRA texture | **516 fps (1.94 ms)** | 281 fps (3.55 ms) | 478 fps (2.09 ms) | 1.70× | CPU, host pixels |
+| 1080p | Preview (1/8) → texture | **1377 fps (0.73 ms)** | 1328 fps (0.75 ms) | 1190 fps (0.84 ms) | 0.90× | CPU, host pixels |
+| 1080p | Encode, BGRA texture → bitstream (alpha, 4 planes) | **278 fps (3.60 ms)** | 176 fps (5.69 ms) | 183 fps (5.45 ms) | 1.04× | CPU, host pixels |
+| 1080p | Encode, BGRA texture → bitstream (opaque, 3 planes) | **352 fps (2.84 ms)** | — | 262 fps (3.82 ms) | 0.74× vs host pixels | CPU, host pixels |
+| 2160p | Decode → BGRA texture | **131 fps (7.64 ms)** | 71 fps (14.08 ms) | 118 fps (8.45 ms) | 1.67× | CPU, host pixels |
+| 2160p | Preview (1/8) → texture | **453 fps (2.21 ms)** | 429 fps (2.33 ms) | 419 fps (2.38 ms) | 0.98× | CPU, host pixels |
+| 2160p | Encode, BGRA texture → bitstream (alpha, 4 planes) | **70 fps (14.28 ms)** | 37 fps ✗ (26.70 ms) | 42 fps ✗ (23.99 ms) | 1.11× | CPU, host pixels |
+| 2160p | Encode, BGRA texture → bitstream (opaque, 3 planes) | **89 fps (11.28 ms)** | — | 60 fps (16.64 ms) | 0.68× vs host pixels | CPU, host pixels |
 
 GPU decode versus CPU decode differs by at most 3 LSB. PSNR is 54.6 dB at 1080p and 64.1 dB at 2160p (54.55 and 64.11 in the log). GPU preview and GPU encode match the CPU path bit for bit (PSNR 100 dB). Encode does colour conversion, FDCT, and quantisation on the GPU; Golomb coding stays on the CPU. Preview is the CPU `decode_preview_bgra` plus `queue.write_texture`.
 

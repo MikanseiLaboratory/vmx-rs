@@ -23,8 +23,8 @@ def tables(rows, title):
     for op in ['encode','decode']:
         for th in ths:
             out.append(f"### {op.capitalize()}, {th} thread{'s' if th!='1' else ''}\n")
-            out.append("| Resolution | Profile | Image | bytes/frame | "+" | ".join(hdr[i] for i in present)+" |")
-            out.append("| --- | --- | --- | ---: | "+" | ".join('---:' for _ in present)+" |")
+            out.append("| Resolution | Profile | Image | bytes/frame | "+" | ".join(hdr[i] for i in present)+" | Fastest |")
+            out.append("| --- | --- | --- | ---: | "+" | ".join('---:' for _ in present)+" | --- |")
             for (res,img,prof) in keys:
                 vals={}
                 for i in present:
@@ -34,11 +34,16 @@ def tables(rows, title):
                 ref=d.get((res,prof,img,'libvmx','encode','1')) or next(r for k,r in d.items() if k[:3]==(res,prof,img))
                 best=max(round(v) for v in vals.values())
                 cells=[]
+                winners=[]
                 for i in present:
                     if i not in vals: cells.append('—'); continue
                     s=f"{vals[i]:.0f}"+(" ✗" if vals[i]<60 else "")
-                    cells.append(f"**{s}**" if round(vals[i])==best else s)
-                out.append(f"| {res} | {prof} — {QN[prof]} ({ref['q']}) | {img} | {int(ref['bytes_per_frame']):,} | "+" | ".join(cells)+" |")
+                    if round(vals[i])==best:
+                        cells.append(f"**{s}**")
+                        winners.append(hdr[i])
+                    else:
+                        cells.append(s)
+                out.append(f"| {res} | {prof} — {QN[prof]} ({ref['q']}) | {img} | {int(ref['bytes_per_frame']):,} | "+" | ".join(cells)+f" | {', '.join(winners)} |")
             out.append("")
     # ratio summary. Fastest is the highest geometric mean of fps
     # (libvmx's ratio is 1). Bold the winner's printed ratio.
@@ -62,7 +67,7 @@ def tables(rows, title):
         best=max(scores.values())
         return [label[i] for i,v in scores.items() if v==best]
     out.append("### vmx / libvmx (geomean over rows, min–max)\n")
-    out.append("| Operation | Threads | vmx / libvmx | vmx-codec / libvmx | 最速 |\n|---|---:|---:|---:|---|")
+    out.append("| Operation | Threads | vmx / libvmx | vmx-codec / libvmx | Fastest |\n|---|---:|---:|---:|---|")
     for op in ['encode','decode']:
         for th in ths:
             shown=[]
@@ -72,8 +77,8 @@ def tables(rows, title):
                 shown.append(text)
             out.append(f"| {op.capitalize()} | {th} | {shown[0]} | {shown[1]} | {', '.join(fastest(op, th))} |")
     out.append("")
-    out.append("vmx / libvmx by image. 最速 is over every implementation present.\n")
-    out.append("| Operation | Threads | natural | bars | 最速 (natural) | 最速 (bars) |\n|---|---:|---:|---:|---|---|")
+    out.append("vmx / libvmx by image. Fastest is over every implementation present.\n")
+    out.append("| Operation | Threads | natural | bars | Fastest (natural) | Fastest (bars) |\n|---|---:|---:|---:|---|---|")
     for op in ['encode','decode']:
         for th in ths:
             cells=[]

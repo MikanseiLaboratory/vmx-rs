@@ -1,5 +1,6 @@
 //! Color conversion between packed formats and internal planar 4:2:2(:4).
 
+use crate::error::{Result, VmxError};
 use crate::tables::{RGB_YUV_601, RGB_YUV_709, ShortRgb, YUV_RGB_601, YUV_RGB_709};
 use crate::types::{ColorSpace, Size};
 
@@ -1174,6 +1175,52 @@ pub fn calculate_psnr(
     (10.0 * (255.0f64 * 255.0 / mse).log10()) as f32
 }
 
+/// Convert one packed UYVY frame to opaque BGRA.
+///
+/// `src` is tightly packed `U Y V Y` (`width * height * 2` bytes) and `width`
+/// is even. The matrix follows `ColorSpace::Undefined`: BT.709 when
+/// `height >= 720`, otherwise BT.601. Alpha is 255. This is a colour
+/// conversion, not a codec round-trip.
+pub fn uyvy_to_bgra(src: &[u8], width: i32, height: i32) -> Result<Vec<u8>> {
+    if width <= 0 || height <= 0 || width % 2 != 0 {
+        return Err(VmxError::InvalidParameters);
+    }
+    let width_u = width as usize;
+    let height_u = height as usize;
+    let src_stride = width_u * 2;
+    let need = src_stride
+        .checked_mul(height_u)
+        .ok_or(VmxError::InvalidParameters)?;
+    if src.len() != need {
+        return Err(VmxError::InvalidParameters);
+    }
+    let size = Size::new(width, height);
+    let y_stride = width_u;
+    let c_stride = width_u / 2;
+    let mut y = vec![0u8; y_stride * height_u];
+    let mut u = vec![0u8; c_stride * height_u];
+    let mut v = vec![0u8; c_stride * height_u];
+    uyvy_to_planar_scalar(
+        src, src_stride, &mut y, y_stride, &mut u, c_stride, &mut v, c_stride, size,
+    );
+    let mut dst = vec![0u8; width_u * 4 * height_u];
+    let table = select_yuv_rgb(ColorSpace::Undefined, height);
+    yuv422_to_bgra_scalar(
+        &y,
+        y_stride,
+        &u,
+        c_stride,
+        &v,
+        c_stride,
+        None,
+        &mut dst,
+        width_u * 4,
+        size,
+        table,
+    );
+    Ok(dst)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1186,6 +1233,30 @@ mod tests {
             *b = ((i * 37 + 11) % 256) as u8;
         }
         (src, stride)
+    }
+
+    #[test]
+    fn uyvy_to_bgra_matches_pixel_formula() {
+        let src = [40u8, 80, 200, 90];
+        let dst = uyvy_to_bgra(&src, 2, 1).unwrap();
+        let table = select_yuv_rgb(ColorSpace::Undefined, 1);
+        let (b, g, r) = yuv_to_bgra_pixel(80, 40_i16 - 128, 200_i16 - 128, table);
+        assert_eq!(&dst[..4], &[b, g, r, 255]);
+        let (b, g, r) = yuv_to_bgra_pixel(90, 40_i16 - 128, 200_i16 - 128, table);
+        assert_eq!(&dst[4..8], &[b, g, r, 255]);
+
+        let mut hd = vec![0u8; 2 * 720 * 2];
+        hd[..4].copy_from_slice(&src);
+        let dst = uyvy_to_bgra(&hd, 2, 720).unwrap();
+        let table = select_yuv_rgb(ColorSpace::Undefined, 720);
+        let (b, g, r) = yuv_to_bgra_pixel(80, 40_i16 - 128, 200_i16 - 128, table);
+        assert_eq!(&dst[..4], &[b, g, r, 255]);
+    }
+
+    #[test]
+    fn uyvy_to_bgra_rejects_bad_size() {
+        assert!(uyvy_to_bgra(&[0, 1], 1, 1).is_err());
+        assert!(uyvy_to_bgra(&[0, 1, 2, 3], 2, 2).is_err());
     }
 
     #[cfg(target_arch = "x86_64")]

@@ -19,6 +19,7 @@ mod thread_pool;
 mod types;
 
 pub use color::ColorSimdPath;
+pub use color::convert::uyvy_to_bgra;
 pub use container::preview_bitstream_length;
 pub use error::{Result, VmxError};
 #[cfg(feature = "wgpu")]

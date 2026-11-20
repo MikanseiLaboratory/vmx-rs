@@ -1,0 +1,385 @@
+res,profile,image,q,impl,simd,op,threads,fps_median,fps_min,fps_max,bytes_per_frame,bitexact_vs_libvmx128
+1080p,LQ,natural,92,libvmx,AVX2(+BMI),encode,1,378.7,357.7,390.8,168577,yes
+1080p,LQ,natural,92,libvmx,AVX2(+BMI),decode,1,406.8,363.1,413.5,168577,yes
+1080p,LQ,natural,92,libvmx,AVX2(+BMI),encode,8,1330.6,1287.1,1354.3,168577,yes
+1080p,LQ,natural,92,libvmx,AVX2(+BMI),decode,8,1328.4,1277.3,1398.5,168577,yes
+1080p,LQ,natural,92,libvmx-128bit,SSE(128bit),encode,1,270.8,253.3,275.4,168577,yes
+1080p,LQ,natural,92,libvmx-128bit,SSE(128bit),decode,1,364.1,358.5,370.8,168577,yes
+1080p,LQ,natural,92,libvmx-128bit,SSE(128bit),encode,8,905.6,842.2,929.7,168577,yes
+1080p,LQ,natural,92,libvmx-128bit,SSE(128bit),decode,8,1197.0,1136.0,1310.3,168577,yes
+1080p,LQ,natural,92,saul-vmx-codec,SSE2 (compile-time),encode,1,177.7,147.0,180.1,168577,yes
+1080p,LQ,natural,92,saul-vmx-codec,SSE2 (compile-time),decode,1,269.2,243.1,271.9,168577,yes
+1080p,LQ,natural,92,saul-vmx-codec,SSE2 (compile-time),encode,8,397.6,381.3,418.2,168577,yes
+1080p,LQ,natural,92,saul-vmx-codec,SSE2 (compile-time),decode,8,579.3,568.1,588.6,168577,yes
+1080p,LQ,natural,92,mikansei-vmx,dct=Avx2 color=Avx2,encode,1,321.6,308.2,333.9,168577,yes
+1080p,LQ,natural,92,mikansei-vmx,dct=Avx2 color=Avx2,decode,1,371.5,368.1,381.0,168577,yes
+1080p,LQ,natural,92,mikansei-vmx,dct=Avx2 color=Avx2,encode,8,2010.8,1932.6,2066.9,168577,yes
+1080p,LQ,natural,92,mikansei-vmx,dct=Avx2 color=Avx2,decode,8,2047.6,1926.7,2161.6,168577,yes
+1080p,SQ,natural,94,libvmx,AVX2(+BMI),encode,1,328.4,316.4,337.9,292310,yes
+1080p,SQ,natural,94,libvmx,AVX2(+BMI),decode,1,284.6,257.3,293.1,292310,yes
+1080p,SQ,natural,94,libvmx,AVX2(+BMI),encode,8,1070.1,1032.9,1108.4,292310,yes
+1080p,SQ,natural,94,libvmx,AVX2(+BMI),decode,8,947.0,932.4,1036.2,292310,yes
+1080p,SQ,natural,94,libvmx-128bit,SSE(128bit),encode,1,233.5,226.1,239.9,292310,yes
+1080p,SQ,natural,94,libvmx-128bit,SSE(128bit),decode,1,264.6,250.6,266.1,292310,yes
+1080p,SQ,natural,94,libvmx-128bit,SSE(128bit),encode,8,791.3,771.0,857.3,292310,yes
+1080p,SQ,natural,94,libvmx-128bit,SSE(128bit),decode,8,903.6,876.6,912.9,292310,yes
+1080p,SQ,natural,94,saul-vmx-codec,SSE2 (compile-time),encode,1,153.0,150.6,160.8,292310,yes
+1080p,SQ,natural,94,saul-vmx-codec,SSE2 (compile-time),decode,1,193.0,190.4,194.8,292310,yes
+1080p,SQ,natural,94,saul-vmx-codec,SSE2 (compile-time),encode,8,424.2,400.5,440.5,292310,yes
+1080p,SQ,natural,94,saul-vmx-codec,SSE2 (compile-time),decode,8,537.5,510.4,552.8,292310,yes
+1080p,SQ,natural,94,mikansei-vmx,dct=Avx2 color=Avx2,encode,1,279.0,268.5,282.3,292310,yes
+1080p,SQ,natural,94,mikansei-vmx,dct=Avx2 color=Avx2,decode,1,291.8,287.6,294.9,292310,yes
+1080p,SQ,natural,94,mikansei-vmx,dct=Avx2 color=Avx2,encode,8,1469.9,1286.3,1525.7,292310,yes
+1080p,SQ,natural,94,mikansei-vmx,dct=Avx2 color=Avx2,decode,8,1326.9,1103.7,1516.0,292310,yes
+1080p,HQ,natural,96,libvmx,AVX2(+BMI),encode,1,263.2,246.7,265.5,559463,yes
+1080p,HQ,natural,96,libvmx,AVX2(+BMI),decode,1,195.3,194.2,202.0,559463,yes
+1080p,HQ,natural,96,libvmx,AVX2(+BMI),encode,8,796.3,743.2,816.0,559463,yes
+1080p,HQ,natural,96,libvmx,AVX2(+BMI),decode,8,617.7,602.3,732.2,559463,yes
+1080p,HQ,natural,96,libvmx-128bit,SSE(128bit),encode,1,178.1,171.3,185.5,559463,yes
+1080p,HQ,natural,96,libvmx-128bit,SSE(128bit),decode,1,162.7,155.2,167.5,559463,yes
+1080p,HQ,natural,96,libvmx-128bit,SSE(128bit),encode,8,590.2,572.8,636.1,559463,yes
+1080p,HQ,natural,96,libvmx-128bit,SSE(128bit),decode,8,539.7,511.8,796.4,559463,yes
+1080p,HQ,natural,96,saul-vmx-codec,SSE2 (compile-time),encode,1,121.8,119.4,124.7,559463,yes
+1080p,HQ,natural,96,saul-vmx-codec,SSE2 (compile-time),decode,1,105.6,102.3,106.4,559463,yes
+1080p,HQ,natural,96,saul-vmx-codec,SSE2 (compile-time),encode,8,347.9,316.0,362.6,559463,yes
+1080p,HQ,natural,96,saul-vmx-codec,SSE2 (compile-time),decode,8,387.5,382.2,392.4,559463,yes
+1080p,HQ,natural,96,mikansei-vmx,dct=Avx2 color=Avx2,encode,1,179.1,172.1,190.1,559463,yes
+1080p,HQ,natural,96,mikansei-vmx,dct=Avx2 color=Avx2,decode,1,187.8,175.0,195.2,559463,yes
+1080p,HQ,natural,96,mikansei-vmx,dct=Avx2 color=Avx2,encode,8,1181.1,1086.0,1191.6,559463,yes
+1080p,HQ,natural,96,mikansei-vmx,dct=Avx2 color=Avx2,decode,8,1130.1,1055.1,1155.0,559463,yes
+1080p,OMT_LQ,natural,92,libvmx,AVX2(+BMI),encode,1,386.4,361.0,396.7,168577,yes
+1080p,OMT_LQ,natural,92,libvmx,AVX2(+BMI),decode,1,410.0,400.7,416.8,168577,yes
+1080p,OMT_LQ,natural,92,libvmx,AVX2(+BMI),encode,8,1295.8,1271.4,1352.7,168577,yes
+1080p,OMT_LQ,natural,92,libvmx,AVX2(+BMI),decode,8,1334.6,1252.5,1370.6,168577,yes
+1080p,OMT_LQ,natural,92,libvmx-128bit,SSE(128bit),encode,1,271.8,261.4,279.0,168577,yes
+1080p,OMT_LQ,natural,92,libvmx-128bit,SSE(128bit),decode,1,361.0,347.0,378.5,168577,yes
+1080p,OMT_LQ,natural,92,libvmx-128bit,SSE(128bit),encode,8,863.4,821.0,961.7,168577,yes
+1080p,OMT_LQ,natural,92,libvmx-128bit,SSE(128bit),decode,8,1152.9,1113.7,1166.4,168577,yes
+1080p,OMT_LQ,natural,92,saul-vmx-codec,SSE2 (compile-time),encode,1,179.7,173.5,182.9,168577,yes
+1080p,OMT_LQ,natural,92,saul-vmx-codec,SSE2 (compile-time),decode,1,277.0,249.2,283.3,168577,yes
+1080p,OMT_LQ,natural,92,saul-vmx-codec,SSE2 (compile-time),encode,8,425.6,399.5,448.2,168577,yes
+1080p,OMT_LQ,natural,92,saul-vmx-codec,SSE2 (compile-time),decode,8,635.4,624.0,648.1,168577,yes
+1080p,OMT_LQ,natural,92,mikansei-vmx,dct=Avx2 color=Avx2,encode,1,339.3,261.7,341.2,168577,yes
+1080p,OMT_LQ,natural,92,mikansei-vmx,dct=Avx2 color=Avx2,decode,1,377.2,348.2,384.6,168577,yes
+1080p,OMT_LQ,natural,92,mikansei-vmx,dct=Avx2 color=Avx2,encode,8,2109.7,2048.9,2143.5,168577,yes
+1080p,OMT_LQ,natural,92,mikansei-vmx,dct=Avx2 color=Avx2,decode,8,2169.1,2073.0,2294.2,168577,yes
+1080p,OMT_SQ,natural,95,libvmx,AVX2(+BMI),encode,1,318.2,237.4,329.0,418883,yes
+1080p,OMT_SQ,natural,95,libvmx,AVX2(+BMI),decode,1,241.5,234.4,246.2,418883,yes
+1080p,OMT_SQ,natural,95,libvmx,AVX2(+BMI),encode,8,988.2,977.6,1105.4,418883,yes
+1080p,OMT_SQ,natural,95,libvmx,AVX2(+BMI),decode,8,776.9,752.2,866.2,418883,yes
+1080p,OMT_SQ,natural,95,libvmx-128bit,SSE(128bit),encode,1,221.9,217.5,223.6,418883,yes
+1080p,OMT_SQ,natural,95,libvmx-128bit,SSE(128bit),decode,1,216.3,211.6,217.7,418883,yes
+1080p,OMT_SQ,natural,95,libvmx-128bit,SSE(128bit),encode,8,720.7,711.3,723.8,418883,yes
+1080p,OMT_SQ,natural,95,libvmx-128bit,SSE(128bit),decode,8,664.5,633.0,727.4,418883,yes
+1080p,OMT_SQ,natural,95,saul-vmx-codec,SSE2 (compile-time),encode,1,141.4,127.3,149.3,418883,yes
+1080p,OMT_SQ,natural,95,saul-vmx-codec,SSE2 (compile-time),decode,1,150.8,148.3,152.3,418883,yes
+1080p,OMT_SQ,natural,95,saul-vmx-codec,SSE2 (compile-time),encode,8,341.6,1.3,410.0,418883,yes
+1080p,OMT_SQ,natural,95,saul-vmx-codec,SSE2 (compile-time),decode,8,462.3,402.8,481.3,418883,yes
+1080p,OMT_SQ,natural,95,mikansei-vmx,dct=Avx2 color=Avx2,encode,1,224.8,221.6,233.4,418883,yes
+1080p,OMT_SQ,natural,95,mikansei-vmx,dct=Avx2 color=Avx2,decode,1,231.2,223.9,234.5,418883,yes
+1080p,OMT_SQ,natural,95,mikansei-vmx,dct=Avx2 color=Avx2,encode,8,1116.9,1021.6,1220.6,418883,yes
+1080p,OMT_SQ,natural,95,mikansei-vmx,dct=Avx2 color=Avx2,decode,8,1071.2,985.7,1114.8,418883,yes
+1080p,OMT_HQ,natural,96,libvmx,AVX2(+BMI),encode,1,268.2,260.3,269.6,559463,yes
+1080p,OMT_HQ,natural,96,libvmx,AVX2(+BMI),decode,1,185.7,180.8,194.6,559463,yes
+1080p,OMT_HQ,natural,96,libvmx,AVX2(+BMI),encode,8,821.2,785.6,837.8,559463,yes
+1080p,OMT_HQ,natural,96,libvmx,AVX2(+BMI),decode,8,614.2,604.8,647.4,559463,yes
+1080p,OMT_HQ,natural,96,libvmx-128bit,SSE(128bit),encode,1,189.6,179.3,191.3,559463,yes
+1080p,OMT_HQ,natural,96,libvmx-128bit,SSE(128bit),decode,1,166.9,142.2,169.6,559463,yes
+1080p,OMT_HQ,natural,96,libvmx-128bit,SSE(128bit),encode,8,605.9,590.9,628.0,559463,yes
+1080p,OMT_HQ,natural,96,libvmx-128bit,SSE(128bit),decode,8,558.6,553.3,569.9,559463,yes
+1080p,OMT_HQ,natural,96,saul-vmx-codec,SSE2 (compile-time),encode,1,130.7,127.0,133.0,559463,yes
+1080p,OMT_HQ,natural,96,saul-vmx-codec,SSE2 (compile-time),decode,1,113.5,113.0,114.3,559463,yes
+1080p,OMT_HQ,natural,96,saul-vmx-codec,SSE2 (compile-time),encode,8,392.8,357.6,400.0,559463,yes
+1080p,OMT_HQ,natural,96,saul-vmx-codec,SSE2 (compile-time),decode,8,424.0,407.8,429.2,559463,yes
+1080p,OMT_HQ,natural,96,mikansei-vmx,dct=Avx2 color=Avx2,encode,1,199.6,195.0,200.2,559463,yes
+1080p,OMT_HQ,natural,96,mikansei-vmx,dct=Avx2 color=Avx2,decode,1,200.1,198.2,201.6,559463,yes
+1080p,OMT_HQ,natural,96,mikansei-vmx,dct=Avx2 color=Avx2,encode,8,1221.1,1160.1,1259.0,559463,yes
+1080p,OMT_HQ,natural,96,mikansei-vmx,dct=Avx2 color=Avx2,decode,8,1231.0,1152.6,1261.2,559463,yes
+1080p,LQ,bars,98,libvmx,AVX2(+BMI),encode,1,609.2,573.7,618.8,22008,yes
+1080p,LQ,bars,98,libvmx,AVX2(+BMI),decode,1,1202.4,1090.6,1253.3,22008,yes
+1080p,LQ,bars,98,libvmx,AVX2(+BMI),encode,8,2085.7,2046.0,2192.7,22008,yes
+1080p,LQ,bars,98,libvmx,AVX2(+BMI),decode,8,4219.6,4136.1,4395.6,22008,yes
+1080p,LQ,bars,98,libvmx-128bit,SSE(128bit),encode,1,408.8,405.0,412.9,22008,yes
+1080p,LQ,bars,98,libvmx-128bit,SSE(128bit),decode,1,1244.7,1171.7,1309.3,22008,yes
+1080p,LQ,bars,98,libvmx-128bit,SSE(128bit),encode,8,1404.5,1390.9,1702.2,22008,yes
+1080p,LQ,bars,98,libvmx-128bit,SSE(128bit),decode,8,4660.0,4476.1,4853.0,22008,yes
+1080p,LQ,bars,98,saul-vmx-codec,SSE2 (compile-time),encode,1,221.0,211.7,223.2,22008,yes
+1080p,LQ,bars,98,saul-vmx-codec,SSE2 (compile-time),decode,1,756.8,742.9,769.0,22008,yes
+1080p,LQ,bars,98,saul-vmx-codec,SSE2 (compile-time),encode,8,482.3,440.7,490.9,22008,yes
+1080p,LQ,bars,98,saul-vmx-codec,SSE2 (compile-time),decode,8,780.3,743.2,807.8,22008,yes
+1080p,LQ,bars,98,mikansei-vmx,dct=Avx2 color=Avx2,encode,1,513.5,485.8,515.7,22008,yes
+1080p,LQ,bars,98,mikansei-vmx,dct=Avx2 color=Avx2,decode,1,914.0,875.6,955.3,22008,yes
+1080p,LQ,bars,98,mikansei-vmx,dct=Avx2 color=Avx2,encode,8,2843.0,2571.6,3030.0,22008,yes
+1080p,LQ,bars,98,mikansei-vmx,dct=Avx2 color=Avx2,decode,8,3691.9,3260.5,3876.6,22008,yes
+1080p,SQ,bars,98,libvmx,AVX2(+BMI),encode,1,607.4,592.7,625.5,22008,yes
+1080p,SQ,bars,98,libvmx,AVX2(+BMI),decode,1,1276.5,1122.0,1360.1,22008,yes
+1080p,SQ,bars,98,libvmx,AVX2(+BMI),encode,8,2121.8,1972.3,2273.1,22008,yes
+1080p,SQ,bars,98,libvmx,AVX2(+BMI),decode,8,4521.0,4427.6,4588.6,22008,yes
+1080p,SQ,bars,98,libvmx-128bit,SSE(128bit),encode,1,404.0,392.5,406.6,22008,yes
+1080p,SQ,bars,98,libvmx-128bit,SSE(128bit),decode,1,1303.4,1222.3,1337.1,22008,yes
+1080p,SQ,bars,98,libvmx-128bit,SSE(128bit),encode,8,1425.0,1354.8,1637.7,22008,yes
+1080p,SQ,bars,98,libvmx-128bit,SSE(128bit),decode,8,4652.0,4397.1,4747.4,22008,yes
+1080p,SQ,bars,98,saul-vmx-codec,SSE2 (compile-time),encode,1,223.8,220.3,226.2,22008,yes
+1080p,SQ,bars,98,saul-vmx-codec,SSE2 (compile-time),decode,1,787.8,748.6,794.7,22008,yes
+1080p,SQ,bars,98,saul-vmx-codec,SSE2 (compile-time),encode,8,480.6,469.1,495.9,22008,yes
+1080p,SQ,bars,98,saul-vmx-codec,SSE2 (compile-time),decode,8,780.5,744.9,801.1,22008,yes
+1080p,SQ,bars,98,mikansei-vmx,dct=Avx2 color=Avx2,encode,1,511.2,507.8,514.4,22008,yes
+1080p,SQ,bars,98,mikansei-vmx,dct=Avx2 color=Avx2,decode,1,957.9,938.1,966.4,22008,yes
+1080p,SQ,bars,98,mikansei-vmx,dct=Avx2 color=Avx2,encode,8,3248.7,3076.2,3335.6,22008,yes
+1080p,SQ,bars,98,mikansei-vmx,dct=Avx2 color=Avx2,decode,8,4058.5,3505.2,4561.4,22008,yes
+1080p,HQ,bars,98,libvmx,AVX2(+BMI),encode,1,648.7,611.9,653.1,24303,yes
+1080p,HQ,bars,98,libvmx,AVX2(+BMI),decode,1,1244.6,1222.8,1251.0,24303,yes
+1080p,HQ,bars,98,libvmx,AVX2(+BMI),encode,8,2061.8,1941.1,2362.0,24303,yes
+1080p,HQ,bars,98,libvmx,AVX2(+BMI),decode,8,4624.2,4233.1,4658.5,24303,yes
+1080p,HQ,bars,98,libvmx-128bit,SSE(128bit),encode,1,407.4,404.6,414.1,24303,yes
+1080p,HQ,bars,98,libvmx-128bit,SSE(128bit),decode,1,1291.2,1249.7,1294.7,24303,yes
+1080p,HQ,bars,98,libvmx-128bit,SSE(128bit),encode,8,1420.9,1306.8,1450.0,24303,yes
+1080p,HQ,bars,98,libvmx-128bit,SSE(128bit),decode,8,4062.7,3832.6,4221.1,24303,yes
+1080p,HQ,bars,98,saul-vmx-codec,SSE2 (compile-time),encode,1,218.6,212.4,223.9,24303,yes
+1080p,HQ,bars,98,saul-vmx-codec,SSE2 (compile-time),decode,1,775.1,762.3,782.6,24303,yes
+1080p,HQ,bars,98,saul-vmx-codec,SSE2 (compile-time),encode,8,461.7,455.1,463.7,24303,yes
+1080p,HQ,bars,98,saul-vmx-codec,SSE2 (compile-time),decode,8,791.8,753.9,816.2,24303,yes
+1080p,HQ,bars,98,mikansei-vmx,dct=Avx2 color=Avx2,encode,1,506.5,446.6,512.3,24303,yes
+1080p,HQ,bars,98,mikansei-vmx,dct=Avx2 color=Avx2,decode,1,957.2,944.1,964.1,24303,yes
+1080p,HQ,bars,98,mikansei-vmx,dct=Avx2 color=Avx2,encode,8,3194.7,3129.0,3279.1,24303,yes
+1080p,HQ,bars,98,mikansei-vmx,dct=Avx2 color=Avx2,decode,8,4497.4,4346.8,4575.5,24303,yes
+1080p,OMT_LQ,bars,98,libvmx,AVX2(+BMI),encode,1,640.8,608.2,649.1,22008,yes
+1080p,OMT_LQ,bars,98,libvmx,AVX2(+BMI),decode,1,1265.0,1016.8,1281.6,22008,yes
+1080p,OMT_LQ,bars,98,libvmx,AVX2(+BMI),encode,8,2167.3,2099.5,2232.4,22008,yes
+1080p,OMT_LQ,bars,98,libvmx,AVX2(+BMI),decode,8,4404.6,4358.8,4593.8,22008,yes
+1080p,OMT_LQ,bars,98,libvmx-128bit,SSE(128bit),encode,1,408.6,385.1,419.3,22008,yes
+1080p,OMT_LQ,bars,98,libvmx-128bit,SSE(128bit),decode,1,1256.1,1221.7,1287.2,22008,yes
+1080p,OMT_LQ,bars,98,libvmx-128bit,SSE(128bit),encode,8,1421.2,1379.6,1456.9,22008,yes
+1080p,OMT_LQ,bars,98,libvmx-128bit,SSE(128bit),decode,8,4578.9,4295.8,4643.0,22008,yes
+1080p,OMT_LQ,bars,98,saul-vmx-codec,SSE2 (compile-time),encode,1,221.0,216.5,224.1,22008,yes
+1080p,OMT_LQ,bars,98,saul-vmx-codec,SSE2 (compile-time),decode,1,777.3,772.9,782.4,22008,yes
+1080p,OMT_LQ,bars,98,saul-vmx-codec,SSE2 (compile-time),encode,8,492.5,444.3,503.6,22008,yes
+1080p,OMT_LQ,bars,98,saul-vmx-codec,SSE2 (compile-time),decode,8,779.8,771.7,790.9,22008,yes
+1080p,OMT_LQ,bars,98,mikansei-vmx,dct=Avx2 color=Avx2,encode,1,516.9,438.9,517.9,22008,yes
+1080p,OMT_LQ,bars,98,mikansei-vmx,dct=Avx2 color=Avx2,decode,1,984.2,925.5,994.6,22008,yes
+1080p,OMT_LQ,bars,98,mikansei-vmx,dct=Avx2 color=Avx2,encode,8,3138.8,2973.6,3260.6,22008,yes
+1080p,OMT_LQ,bars,98,mikansei-vmx,dct=Avx2 color=Avx2,decode,8,4290.8,4229.4,4401.3,22008,yes
+1080p,OMT_SQ,bars,98,libvmx,AVX2(+BMI),encode,1,633.8,610.5,666.4,24303,yes
+1080p,OMT_SQ,bars,98,libvmx,AVX2(+BMI),decode,1,1244.3,1113.7,1282.3,24303,yes
+1080p,OMT_SQ,bars,98,libvmx,AVX2(+BMI),encode,8,2097.5,2051.4,2144.4,24303,yes
+1080p,OMT_SQ,bars,98,libvmx,AVX2(+BMI),decode,8,4410.8,4359.3,4603.5,24303,yes
+1080p,OMT_SQ,bars,98,libvmx-128bit,SSE(128bit),encode,1,414.5,409.1,421.0,24303,yes
+1080p,OMT_SQ,bars,98,libvmx-128bit,SSE(128bit),decode,1,1288.0,1239.8,1352.7,24303,yes
+1080p,OMT_SQ,bars,98,libvmx-128bit,SSE(128bit),encode,8,1398.1,1371.2,1574.2,24303,yes
+1080p,OMT_SQ,bars,98,libvmx-128bit,SSE(128bit),decode,8,4674.0,4469.6,4705.1,24303,yes
+1080p,OMT_SQ,bars,98,saul-vmx-codec,SSE2 (compile-time),encode,1,223.6,219.9,223.9,24303,yes
+1080p,OMT_SQ,bars,98,saul-vmx-codec,SSE2 (compile-time),decode,1,750.9,713.4,788.3,24303,yes
+1080p,OMT_SQ,bars,98,saul-vmx-codec,SSE2 (compile-time),encode,8,449.2,411.2,488.1,24303,yes
+1080p,OMT_SQ,bars,98,saul-vmx-codec,SSE2 (compile-time),decode,8,734.5,678.6,742.4,24303,yes
+1080p,OMT_SQ,bars,98,mikansei-vmx,dct=Avx2 color=Avx2,encode,1,506.5,496.3,508.6,24303,yes
+1080p,OMT_SQ,bars,98,mikansei-vmx,dct=Avx2 color=Avx2,decode,1,956.2,953.3,964.5,24303,yes
+1080p,OMT_SQ,bars,98,mikansei-vmx,dct=Avx2 color=Avx2,encode,8,2842.7,2739.9,3030.1,24303,yes
+1080p,OMT_SQ,bars,98,mikansei-vmx,dct=Avx2 color=Avx2,decode,8,4380.2,3498.4,4494.2,24303,yes
+1080p,OMT_HQ,bars,98,libvmx,AVX2(+BMI),encode,1,596.7,535.3,635.5,24303,yes
+1080p,OMT_HQ,bars,98,libvmx,AVX2(+BMI),decode,1,1202.5,1169.9,1276.6,24303,yes
+1080p,OMT_HQ,bars,98,libvmx,AVX2(+BMI),encode,8,2065.5,2009.8,2113.1,24303,yes
+1080p,OMT_HQ,bars,98,libvmx,AVX2(+BMI),decode,8,4300.6,4284.1,4414.3,24303,yes
+1080p,OMT_HQ,bars,98,libvmx-128bit,SSE(128bit),encode,1,411.8,400.3,414.3,24303,yes
+1080p,OMT_HQ,bars,98,libvmx-128bit,SSE(128bit),decode,1,1269.9,1209.0,1304.7,24303,yes
+1080p,OMT_HQ,bars,98,libvmx-128bit,SSE(128bit),encode,8,1432.5,1392.0,1522.7,24303,yes
+1080p,OMT_HQ,bars,98,libvmx-128bit,SSE(128bit),decode,8,4459.5,4438.0,4596.5,24303,yes
+1080p,OMT_HQ,bars,98,saul-vmx-codec,SSE2 (compile-time),encode,1,220.7,212.1,223.5,24303,yes
+1080p,OMT_HQ,bars,98,saul-vmx-codec,SSE2 (compile-time),decode,1,784.2,768.7,791.1,24303,yes
+1080p,OMT_HQ,bars,98,saul-vmx-codec,SSE2 (compile-time),encode,8,481.7,442.1,490.9,24303,yes
+1080p,OMT_HQ,bars,98,saul-vmx-codec,SSE2 (compile-time),decode,8,781.4,772.6,790.0,24303,yes
+1080p,OMT_HQ,bars,98,mikansei-vmx,dct=Avx2 color=Avx2,encode,1,510.2,487.1,513.7,24303,yes
+1080p,OMT_HQ,bars,98,mikansei-vmx,dct=Avx2 color=Avx2,decode,1,988.3,974.9,1001.1,24303,yes
+1080p,OMT_HQ,bars,98,mikansei-vmx,dct=Avx2 color=Avx2,encode,8,2495.6,2393.8,2643.5,24303,yes
+1080p,OMT_HQ,bars,98,mikansei-vmx,dct=Avx2 color=Avx2,decode,8,4396.8,4329.3,4596.9,24303,yes
+2160p,LQ,natural,92,libvmx,AVX2(+BMI),encode,1,101.6,99.2,104.6,595921,yes
+2160p,LQ,natural,92,libvmx,AVX2(+BMI),decode,1,116.9,113.2,118.0,595921,yes
+2160p,LQ,natural,92,libvmx,AVX2(+BMI),encode,8,365.6,344.4,389.1,595921,yes
+2160p,LQ,natural,92,libvmx,AVX2(+BMI),decode,8,430.4,420.8,472.6,595921,yes
+2160p,LQ,natural,92,libvmx-128bit,SSE(128bit),encode,1,64.9,62.0,69.5,595921,yes
+2160p,LQ,natural,92,libvmx-128bit,SSE(128bit),decode,1,101.2,76.0,103.3,595921,yes
+2160p,LQ,natural,92,libvmx-128bit,SSE(128bit),encode,8,256.9,250.4,278.9,595921,yes
+2160p,LQ,natural,92,libvmx-128bit,SSE(128bit),decode,8,362.0,338.9,383.5,595921,yes
+2160p,LQ,natural,92,saul-vmx-codec,SSE2 (compile-time),encode,1,42.8,40.0,44.2,595921,yes
+2160p,LQ,natural,92,saul-vmx-codec,SSE2 (compile-time),decode,1,75.0,74.3,75.8,595921,yes
+2160p,LQ,natural,92,saul-vmx-codec,SSE2 (compile-time),encode,8,132.4,122.4,137.4,595921,yes
+2160p,LQ,natural,92,saul-vmx-codec,SSE2 (compile-time),decode,8,192.8,187.9,198.7,595921,yes
+2160p,LQ,natural,92,mikansei-vmx,dct=Avx2 color=Avx2,encode,1,77.9,68.1,82.8,595921,yes
+2160p,LQ,natural,92,mikansei-vmx,dct=Avx2 color=Avx2,decode,1,91.8,79.0,98.3,595921,yes
+2160p,LQ,natural,92,mikansei-vmx,dct=Avx2 color=Avx2,encode,8,544.0,512.1,581.1,595921,yes
+2160p,LQ,natural,92,mikansei-vmx,dct=Avx2 color=Avx2,decode,8,636.3,620.8,661.0,595921,yes
+2160p,SQ,natural,94,libvmx,AVX2(+BMI),encode,1,82.0,76.6,85.8,1088322,yes
+2160p,SQ,natural,94,libvmx,AVX2(+BMI),decode,1,73.9,67.6,78.8,1088322,yes
+2160p,SQ,natural,94,libvmx,AVX2(+BMI),encode,8,300.2,290.1,346.3,1088322,yes
+2160p,SQ,natural,94,libvmx,AVX2(+BMI),decode,8,282.8,264.5,381.8,1088322,yes
+2160p,SQ,natural,94,libvmx-128bit,SSE(128bit),encode,1,55.9,52.9,57.1,1088322,yes
+2160p,SQ,natural,94,libvmx-128bit,SSE(128bit),decode,1,60.2,55.9,64.4,1088322,yes
+2160p,SQ,natural,94,libvmx-128bit,SSE(128bit),encode,8,247.0,234.0,269.1,1088322,yes
+2160p,SQ,natural,94,libvmx-128bit,SSE(128bit),decode,8,255.9,247.4,282.7,1088322,yes
+2160p,SQ,natural,94,saul-vmx-codec,SSE2 (compile-time),encode,1,38.2,36.6,40.4,1088322,yes
+2160p,SQ,natural,94,saul-vmx-codec,SSE2 (compile-time),decode,1,49.6,48.5,50.4,1088322,yes
+2160p,SQ,natural,94,saul-vmx-codec,SSE2 (compile-time),encode,8,124.7,114.9,128.5,1088322,yes
+2160p,SQ,natural,94,saul-vmx-codec,SSE2 (compile-time),decode,8,172.9,168.3,177.9,1088322,yes
+2160p,SQ,natural,94,mikansei-vmx,dct=Avx2 color=Avx2,encode,1,67.5,58.3,68.6,1088322,yes
+2160p,SQ,natural,94,mikansei-vmx,dct=Avx2 color=Avx2,decode,1,62.2,56.9,65.4,1088322,yes
+2160p,SQ,natural,94,mikansei-vmx,dct=Avx2 color=Avx2,encode,8,451.2,423.2,458.5,1088322,yes
+2160p,SQ,natural,94,mikansei-vmx,dct=Avx2 color=Avx2,decode,8,477.4,471.0,500.8,1088322,yes
+2160p,HQ,natural,96,libvmx,AVX2(+BMI),encode,1,64.0,60.9,65.5,2145917,yes
+2160p,HQ,natural,96,libvmx,AVX2(+BMI),decode,1,43.5,41.6,44.7,2145917,yes
+2160p,HQ,natural,96,libvmx,AVX2(+BMI),encode,8,256.5,249.3,280.2,2145917,yes
+2160p,HQ,natural,96,libvmx,AVX2(+BMI),decode,8,184.6,175.8,198.0,2145917,yes
+2160p,HQ,natural,96,libvmx-128bit,SSE(128bit),encode,1,43.0,41.4,45.0,2145917,yes
+2160p,HQ,natural,96,libvmx-128bit,SSE(128bit),decode,1,37.7,36.0,38.5,2145917,yes
+2160p,HQ,natural,96,libvmx-128bit,SSE(128bit),encode,8,220.3,199.5,258.8,2145917,yes
+2160p,HQ,natural,96,libvmx-128bit,SSE(128bit),decode,8,207.0,182.8,247.0,2145917,yes
+2160p,HQ,natural,96,saul-vmx-codec,SSE2 (compile-time),encode,1,31.8,29.7,32.8,2145917,yes
+2160p,HQ,natural,96,saul-vmx-codec,SSE2 (compile-time),decode,1,27.4,27.0,27.8,2145917,yes
+2160p,HQ,natural,96,saul-vmx-codec,SSE2 (compile-time),encode,8,100.6,92.7,108.6,2145917,yes
+2160p,HQ,natural,96,saul-vmx-codec,SSE2 (compile-time),decode,8,128.9,121.2,134.9,2145917,yes
+2160p,HQ,natural,96,mikansei-vmx,dct=Avx2 color=Avx2,encode,1,48.3,47.0,51.0,2145917,yes
+2160p,HQ,natural,96,mikansei-vmx,dct=Avx2 color=Avx2,decode,1,46.5,45.0,49.1,2145917,yes
+2160p,HQ,natural,96,mikansei-vmx,dct=Avx2 color=Avx2,encode,8,329.5,306.0,340.6,2145917,yes
+2160p,HQ,natural,96,mikansei-vmx,dct=Avx2 color=Avx2,decode,8,209.4,83.0,293.4,2145917,yes
+2160p,OMT_LQ,natural,92,libvmx,AVX2(+BMI),encode,1,101.5,97.7,104.8,595921,yes
+2160p,OMT_LQ,natural,92,libvmx,AVX2(+BMI),decode,1,110.1,100.9,114.9,595921,yes
+2160p,OMT_LQ,natural,92,libvmx,AVX2(+BMI),encode,8,367.5,355.4,378.8,595921,yes
+2160p,OMT_LQ,natural,92,libvmx,AVX2(+BMI),decode,8,334.3,32.4,442.3,595921,yes
+2160p,OMT_LQ,natural,92,libvmx-128bit,SSE(128bit),encode,1,55.7,48.2,63.7,595921,yes
+2160p,OMT_LQ,natural,92,libvmx-128bit,SSE(128bit),decode,1,96.1,91.4,101.9,595921,yes
+2160p,OMT_LQ,natural,92,libvmx-128bit,SSE(128bit),encode,8,245.2,226.2,267.6,595921,yes
+2160p,OMT_LQ,natural,92,libvmx-128bit,SSE(128bit),decode,8,310.3,268.7,381.6,595921,yes
+2160p,OMT_LQ,natural,92,saul-vmx-codec,SSE2 (compile-time),encode,1,40.9,30.3,45.1,595921,yes
+2160p,OMT_LQ,natural,92,saul-vmx-codec,SSE2 (compile-time),decode,1,74.8,72.5,75.3,595921,yes
+2160p,OMT_LQ,natural,92,saul-vmx-codec,SSE2 (compile-time),encode,8,124.7,98.8,135.2,595921,yes
+2160p,OMT_LQ,natural,92,saul-vmx-codec,SSE2 (compile-time),decode,8,173.9,159.9,189.1,595921,yes
+2160p,OMT_LQ,natural,92,mikansei-vmx,dct=Avx2 color=Avx2,encode,1,86.5,77.4,86.9,595921,yes
+2160p,OMT_LQ,natural,92,mikansei-vmx,dct=Avx2 color=Avx2,decode,1,102.8,99.7,105.4,595921,yes
+2160p,OMT_LQ,natural,92,mikansei-vmx,dct=Avx2 color=Avx2,encode,8,572.1,517.4,597.8,595921,yes
+2160p,OMT_LQ,natural,92,mikansei-vmx,dct=Avx2 color=Avx2,decode,8,684.9,653.1,716.9,595921,yes
+2160p,OMT_SQ,natural,92,libvmx,AVX2(+BMI),encode,1,103.5,95.0,104.9,595921,yes
+2160p,OMT_SQ,natural,92,libvmx,AVX2(+BMI),decode,1,119.3,115.6,120.1,595921,yes
+2160p,OMT_SQ,natural,92,libvmx,AVX2(+BMI),encode,8,358.4,286.5,375.0,595921,yes
+2160p,OMT_SQ,natural,92,libvmx,AVX2(+BMI),decode,8,422.6,404.5,435.5,595921,yes
+2160p,OMT_SQ,natural,92,libvmx-128bit,SSE(128bit),encode,1,71.0,70.4,71.4,595921,yes
+2160p,OMT_SQ,natural,92,libvmx-128bit,SSE(128bit),decode,1,102.3,94.1,104.1,595921,yes
+2160p,OMT_SQ,natural,92,libvmx-128bit,SSE(128bit),encode,8,257.3,246.8,265.1,595921,yes
+2160p,OMT_SQ,natural,92,libvmx-128bit,SSE(128bit),decode,8,382.2,364.1,431.1,595921,yes
+2160p,OMT_SQ,natural,92,saul-vmx-codec,SSE2 (compile-time),encode,1,45.0,42.2,46.5,595921,yes
+2160p,OMT_SQ,natural,92,saul-vmx-codec,SSE2 (compile-time),decode,1,74.6,74.0,75.1,595921,yes
+2160p,OMT_SQ,natural,92,saul-vmx-codec,SSE2 (compile-time),encode,8,132.8,126.4,138.3,595921,yes
+2160p,OMT_SQ,natural,92,saul-vmx-codec,SSE2 (compile-time),decode,8,202.5,199.6,209.1,595921,yes
+2160p,OMT_SQ,natural,92,mikansei-vmx,dct=Avx2 color=Avx2,encode,1,86.5,74.8,87.2,595921,yes
+2160p,OMT_SQ,natural,92,mikansei-vmx,dct=Avx2 color=Avx2,decode,1,101.3,97.1,103.4,595921,yes
+2160p,OMT_SQ,natural,92,mikansei-vmx,dct=Avx2 color=Avx2,encode,8,543.8,529.3,557.2,595921,yes
+2160p,OMT_SQ,natural,92,mikansei-vmx,dct=Avx2 color=Avx2,decode,8,645.2,585.0,680.7,595921,yes
+2160p,OMT_HQ,natural,94,libvmx,AVX2(+BMI),encode,1,98.1,97.4,99.5,1192159,yes
+2160p,OMT_HQ,natural,94,libvmx,AVX2(+BMI),decode,1,84.0,83.0,84.1,1192159,yes
+2160p,OMT_HQ,natural,94,libvmx,AVX2(+BMI),encode,8,348.4,338.3,376.3,1192159,yes
+2160p,OMT_HQ,natural,94,libvmx,AVX2(+BMI),decode,8,296.2,252.4,307.4,1192159,yes
+2160p,OMT_HQ,natural,94,libvmx-128bit,SSE(128bit),encode,1,65.1,63.9,65.5,1192159,yes
+2160p,OMT_HQ,natural,94,libvmx-128bit,SSE(128bit),decode,1,72.6,67.9,73.7,1192159,yes
+2160p,OMT_HQ,natural,94,libvmx-128bit,SSE(128bit),encode,8,253.2,249.5,267.7,1192159,yes
+2160p,OMT_HQ,natural,94,libvmx-128bit,SSE(128bit),decode,8,272.6,263.0,289.2,1192159,yes
+2160p,OMT_HQ,natural,94,saul-vmx-codec,SSE2 (compile-time),encode,1,41.6,40.8,41.9,1192159,yes
+2160p,OMT_HQ,natural,94,saul-vmx-codec,SSE2 (compile-time),decode,1,51.5,50.0,51.7,1192159,yes
+2160p,OMT_HQ,natural,94,saul-vmx-codec,SSE2 (compile-time),encode,8,117.3,111.2,131.1,1192159,yes
+2160p,OMT_HQ,natural,94,saul-vmx-codec,SSE2 (compile-time),decode,8,163.0,157.0,176.7,1192159,yes
+2160p,OMT_HQ,natural,94,mikansei-vmx,dct=Avx2 color=Avx2,encode,1,64.1,63.4,68.7,1192159,yes
+2160p,OMT_HQ,natural,94,mikansei-vmx,dct=Avx2 color=Avx2,decode,1,62.3,60.9,64.0,1192159,yes
+2160p,OMT_HQ,natural,94,mikansei-vmx,dct=Avx2 color=Avx2,encode,8,455.6,445.2,469.1,1192159,yes
+2160p,OMT_HQ,natural,94,mikansei-vmx,dct=Avx2 color=Avx2,decode,8,467.4,424.1,488.7,1192159,yes
+2160p,LQ,bars,98,libvmx,AVX2(+BMI),encode,1,160.5,148.0,166.6,76145,yes
+2160p,LQ,bars,98,libvmx,AVX2(+BMI),decode,1,368.4,303.2,393.0,76145,yes
+2160p,LQ,bars,98,libvmx,AVX2(+BMI),encode,8,571.3,549.2,595.8,76145,yes
+2160p,LQ,bars,98,libvmx,AVX2(+BMI),decode,8,1071.9,935.4,1116.1,76145,yes
+2160p,LQ,bars,98,libvmx-128bit,SSE(128bit),encode,1,104.4,88.6,105.8,76145,yes
+2160p,LQ,bars,98,libvmx-128bit,SSE(128bit),decode,1,364.0,339.9,376.8,76145,yes
+2160p,LQ,bars,98,libvmx-128bit,SSE(128bit),encode,8,374.9,349.8,390.6,76145,yes
+2160p,LQ,bars,98,libvmx-128bit,SSE(128bit),decode,8,1051.8,1026.5,1097.2,76145,yes
+2160p,LQ,bars,98,saul-vmx-codec,SSE2 (compile-time),encode,1,52.1,42.7,53.7,76145,yes
+2160p,LQ,bars,98,saul-vmx-codec,SSE2 (compile-time),decode,1,181.1,146.7,186.9,76145,yes
+2160p,LQ,bars,98,saul-vmx-codec,SSE2 (compile-time),encode,8,121.9,117.9,123.6,76145,yes
+2160p,LQ,bars,98,saul-vmx-codec,SSE2 (compile-time),decode,8,226.5,211.6,235.6,76145,yes
+2160p,LQ,bars,98,mikansei-vmx,dct=Avx2 color=Avx2,encode,1,116.8,107.7,125.0,76145,yes
+2160p,LQ,bars,98,mikansei-vmx,dct=Avx2 color=Avx2,decode,1,263.2,259.5,266.1,76145,yes
+2160p,LQ,bars,98,mikansei-vmx,dct=Avx2 color=Avx2,encode,8,734.4,633.9,768.0,76145,yes
+2160p,LQ,bars,98,mikansei-vmx,dct=Avx2 color=Avx2,decode,8,1067.6,950.5,1095.2,76145,yes
+2160p,SQ,bars,98,libvmx,AVX2(+BMI),encode,1,154.1,147.6,160.8,76145,yes
+2160p,SQ,bars,98,libvmx,AVX2(+BMI),decode,1,354.9,319.5,359.1,76145,yes
+2160p,SQ,bars,98,libvmx,AVX2(+BMI),encode,8,539.7,518.7,555.0,76145,yes
+2160p,SQ,bars,98,libvmx,AVX2(+BMI),decode,8,1222.6,1133.3,1287.9,76145,yes
+2160p,SQ,bars,98,libvmx-128bit,SSE(128bit),encode,1,107.7,105.9,108.1,76145,yes
+2160p,SQ,bars,98,libvmx-128bit,SSE(128bit),decode,1,375.3,326.6,383.8,76145,yes
+2160p,SQ,bars,98,libvmx-128bit,SSE(128bit),encode,8,340.5,336.1,373.9,76145,yes
+2160p,SQ,bars,98,libvmx-128bit,SSE(128bit),decode,8,914.4,763.0,1044.6,76145,yes
+2160p,SQ,bars,98,saul-vmx-codec,SSE2 (compile-time),encode,1,51.9,45.9,52.9,76145,yes
+2160p,SQ,bars,98,saul-vmx-codec,SSE2 (compile-time),decode,1,189.0,155.8,192.5,76145,yes
+2160p,SQ,bars,98,saul-vmx-codec,SSE2 (compile-time),encode,8,115.0,102.6,124.0,76145,yes
+2160p,SQ,bars,98,saul-vmx-codec,SSE2 (compile-time),decode,8,241.9,228.2,249.4,76145,yes
+2160p,SQ,bars,98,mikansei-vmx,dct=Avx2 color=Avx2,encode,1,118.0,113.1,119.5,76145,yes
+2160p,SQ,bars,98,mikansei-vmx,dct=Avx2 color=Avx2,decode,1,247.9,204.5,251.9,76145,yes
+2160p,SQ,bars,98,mikansei-vmx,dct=Avx2 color=Avx2,encode,8,839.3,775.0,849.1,76145,yes
+2160p,SQ,bars,98,mikansei-vmx,dct=Avx2 color=Avx2,decode,8,1206.2,1191.1,1463.0,76145,yes
+2160p,HQ,bars,98,libvmx,AVX2(+BMI),encode,1,153.4,148.6,157.1,80733,yes
+2160p,HQ,bars,98,libvmx,AVX2(+BMI),decode,1,349.4,347.1,365.9,80733,yes
+2160p,HQ,bars,98,libvmx,AVX2(+BMI),encode,8,540.2,528.5,543.0,80733,yes
+2160p,HQ,bars,98,libvmx,AVX2(+BMI),decode,8,1290.0,1178.4,1622.4,80733,yes
+2160p,HQ,bars,98,libvmx-128bit,SSE(128bit),encode,1,101.8,82.2,103.4,80733,yes
+2160p,HQ,bars,98,libvmx-128bit,SSE(128bit),decode,1,362.9,348.8,367.5,80733,yes
+2160p,HQ,bars,98,libvmx-128bit,SSE(128bit),encode,8,367.9,355.2,379.7,80733,yes
+2160p,HQ,bars,98,libvmx-128bit,SSE(128bit),decode,8,1179.0,1086.6,1301.3,80733,yes
+2160p,HQ,bars,98,saul-vmx-codec,SSE2 (compile-time),encode,1,46.2,37.1,51.9,80733,yes
+2160p,HQ,bars,98,saul-vmx-codec,SSE2 (compile-time),decode,1,169.9,163.2,186.0,80733,yes
+2160p,HQ,bars,98,saul-vmx-codec,SSE2 (compile-time),encode,8,128.1,116.8,131.1,80733,yes
+2160p,HQ,bars,98,saul-vmx-codec,SSE2 (compile-time),decode,8,250.2,244.0,256.3,80733,yes
+2160p,HQ,bars,98,mikansei-vmx,dct=Avx2 color=Avx2,encode,1,120.5,115.7,124.8,80733,yes
+2160p,HQ,bars,98,mikansei-vmx,dct=Avx2 color=Avx2,decode,1,250.0,244.1,255.2,80733,yes
+2160p,HQ,bars,98,mikansei-vmx,dct=Avx2 color=Avx2,encode,8,835.9,808.7,858.0,80733,yes
+2160p,HQ,bars,98,mikansei-vmx,dct=Avx2 color=Avx2,decode,8,1583.0,1512.8,1597.8,80733,yes
+2160p,OMT_LQ,bars,98,libvmx,AVX2(+BMI),encode,1,153.6,146.9,164.7,76145,yes
+2160p,OMT_LQ,bars,98,libvmx,AVX2(+BMI),decode,1,366.0,323.1,386.1,76145,yes
+2160p,OMT_LQ,bars,98,libvmx,AVX2(+BMI),encode,8,514.8,498.9,553.9,76145,yes
+2160p,OMT_LQ,bars,98,libvmx,AVX2(+BMI),decode,8,1260.9,1190.3,1698.0,76145,yes
+2160p,OMT_LQ,bars,98,libvmx-128bit,SSE(128bit),encode,1,99.1,95.9,103.7,76145,yes
+2160p,OMT_LQ,bars,98,libvmx-128bit,SSE(128bit),decode,1,358.6,348.1,365.3,76145,yes
+2160p,OMT_LQ,bars,98,libvmx-128bit,SSE(128bit),encode,8,351.5,344.4,380.1,76145,yes
+2160p,OMT_LQ,bars,98,libvmx-128bit,SSE(128bit),decode,8,1279.3,1179.2,1348.4,76145,yes
+2160p,OMT_LQ,bars,98,saul-vmx-codec,SSE2 (compile-time),encode,1,53.2,51.9,53.9,76145,yes
+2160p,OMT_LQ,bars,98,saul-vmx-codec,SSE2 (compile-time),decode,1,185.7,156.4,188.5,76145,yes
+2160p,OMT_LQ,bars,98,saul-vmx-codec,SSE2 (compile-time),encode,8,118.9,105.6,122.4,76145,yes
+2160p,OMT_LQ,bars,98,saul-vmx-codec,SSE2 (compile-time),decode,8,241.5,235.0,245.6,76145,yes
+2160p,OMT_LQ,bars,98,mikansei-vmx,dct=Avx2 color=Avx2,encode,1,117.7,117.0,119.5,76145,yes
+2160p,OMT_LQ,bars,98,mikansei-vmx,dct=Avx2 color=Avx2,decode,1,243.9,221.9,253.9,76145,yes
+2160p,OMT_LQ,bars,98,mikansei-vmx,dct=Avx2 color=Avx2,encode,8,814.0,724.8,833.7,76145,yes
+2160p,OMT_LQ,bars,98,mikansei-vmx,dct=Avx2 color=Avx2,decode,8,1537.2,1408.9,1578.6,76145,yes
+2160p,OMT_SQ,bars,98,libvmx,AVX2(+BMI),encode,1,156.7,149.9,162.1,76145,yes
+2160p,OMT_SQ,bars,98,libvmx,AVX2(+BMI),decode,1,345.9,333.2,360.8,76145,yes
+2160p,OMT_SQ,bars,98,libvmx,AVX2(+BMI),encode,8,524.0,423.1,532.7,76145,yes
+2160p,OMT_SQ,bars,98,libvmx,AVX2(+BMI),decode,8,1234.1,1192.3,1480.9,76145,yes
+2160p,OMT_SQ,bars,98,libvmx-128bit,SSE(128bit),encode,1,97.2,80.8,102.4,76145,yes
+2160p,OMT_SQ,bars,98,libvmx-128bit,SSE(128bit),decode,1,357.2,353.5,366.1,76145,yes
+2160p,OMT_SQ,bars,98,libvmx-128bit,SSE(128bit),encode,8,359.8,346.4,369.4,76145,yes
+2160p,OMT_SQ,bars,98,libvmx-128bit,SSE(128bit),decode,8,1282.7,1192.3,1410.2,76145,yes
+2160p,OMT_SQ,bars,98,saul-vmx-codec,SSE2 (compile-time),encode,1,48.0,42.9,52.0,76145,yes
+2160p,OMT_SQ,bars,98,saul-vmx-codec,SSE2 (compile-time),decode,1,179.3,162.4,185.6,76145,yes
+2160p,OMT_SQ,bars,98,saul-vmx-codec,SSE2 (compile-time),encode,8,122.6,119.4,134.4,76145,yes
+2160p,OMT_SQ,bars,98,saul-vmx-codec,SSE2 (compile-time),decode,8,241.2,230.0,249.3,76145,yes
+2160p,OMT_SQ,bars,98,mikansei-vmx,dct=Avx2 color=Avx2,encode,1,114.8,112.7,116.8,76145,yes
+2160p,OMT_SQ,bars,98,mikansei-vmx,dct=Avx2 color=Avx2,decode,1,234.4,167.2,245.6,76145,yes
+2160p,OMT_SQ,bars,98,mikansei-vmx,dct=Avx2 color=Avx2,encode,8,796.4,771.6,808.3,76145,yes
+2160p,OMT_SQ,bars,98,mikansei-vmx,dct=Avx2 color=Avx2,decode,8,1523.2,1425.8,1535.7,76145,yes
+2160p,OMT_HQ,bars,98,libvmx,AVX2(+BMI),encode,1,147.5,137.2,153.5,80733,yes
+2160p,OMT_HQ,bars,98,libvmx,AVX2(+BMI),decode,1,345.9,336.8,361.8,80733,yes
+2160p,OMT_HQ,bars,98,libvmx,AVX2(+BMI),encode,8,530.5,515.0,537.0,80733,yes
+2160p,OMT_HQ,bars,98,libvmx,AVX2(+BMI),decode,8,1355.1,1211.9,1687.6,80733,yes
+2160p,OMT_HQ,bars,98,libvmx-128bit,SSE(128bit),encode,1,100.7,99.0,104.0,80733,yes
+2160p,OMT_HQ,bars,98,libvmx-128bit,SSE(128bit),decode,1,342.2,300.3,357.6,80733,yes
+2160p,OMT_HQ,bars,98,libvmx-128bit,SSE(128bit),encode,8,352.2,341.8,387.6,80733,yes
+2160p,OMT_HQ,bars,98,libvmx-128bit,SSE(128bit),decode,8,1214.0,1177.0,1267.7,80733,yes
+2160p,OMT_HQ,bars,98,saul-vmx-codec,SSE2 (compile-time),encode,1,49.7,46.5,52.6,80733,yes
+2160p,OMT_HQ,bars,98,saul-vmx-codec,SSE2 (compile-time),decode,1,189.3,185.6,190.6,80733,yes
+2160p,OMT_HQ,bars,98,saul-vmx-codec,SSE2 (compile-time),encode,8,134.6,119.0,137.4,80733,yes
+2160p,OMT_HQ,bars,98,saul-vmx-codec,SSE2 (compile-time),decode,8,253.3,244.7,255.8,80733,yes
+2160p,OMT_HQ,bars,98,mikansei-vmx,dct=Avx2 color=Avx2,encode,1,115.6,104.1,119.1,80733,yes
+2160p,OMT_HQ,bars,98,mikansei-vmx,dct=Avx2 color=Avx2,decode,1,245.8,241.0,251.4,80733,yes
+2160p,OMT_HQ,bars,98,mikansei-vmx,dct=Avx2 color=Avx2,encode,8,811.3,720.4,844.2,80733,yes
+2160p,OMT_HQ,bars,98,mikansei-vmx,dct=Avx2 color=Avx2,decode,8,1501.5,1427.6,1570.2,80733,yes

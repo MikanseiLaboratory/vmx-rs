@@ -134,6 +134,19 @@ fn quality_report(
     .expect("read decode");
     print_quality("GPU decode vs CPU decode", &cpu_out, &gpu_out);
 
+    let exact_frame = gpu_dec
+        .decode_to_texture_exact(device, queue)
+        .expect("gpu exact decode");
+    let exact_out = gpu::read_texture_bgra(
+        device,
+        queue,
+        &exact_frame.texture,
+        exact_frame.width,
+        exact_frame.height,
+    )
+    .expect("read exact decode");
+    print_quality("GPU exact decode vs CPU decode", &cpu_out, &exact_out);
+
     let ps = cpu_dec.preview_size();
     let pstride = ps.width as usize * 4;
     let mut cpu_prev = vec![0u8; pstride * ps.height as usize];
@@ -511,6 +524,19 @@ fn bench_resolution(
             let _frame = gpu_dec
                 .decode_to_texture(device, queue)
                 .expect("gpu decode");
+            wait_idle(device);
+        }),
+    );
+    emit_case(
+        out,
+        frame,
+        profile_name,
+        q,
+        "GPU decode_to_texture_exact",
+        &timed_iters(warmup, iters, || {
+            let _frame = gpu_dec
+                .decode_to_texture_exact(device, queue)
+                .expect("gpu exact decode");
             wait_idle(device);
         }),
     );

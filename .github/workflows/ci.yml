@@ -48,3 +48,6 @@ jobs:
           components: clippy
       - run: cargo clippy --all-targets --features wgpu -- -D warnings
       - run: cargo test --features wgpu
+      # settle_q runs 60 2160p encode+save frames per case and is minutes in
+      # debug; run it in release so it stays practical.
+      - run: cargo test --release --features wgpu --test settle_q

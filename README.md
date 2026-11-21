@@ -119,20 +119,34 @@ Callers pass their existing `Device` / `Queue`. After `load_from`,
 texture and return after `queue.submit`. Each call writes a new texture;
 later decodes do not overwrite it. Later submits on the same queue can
 sample it; CPU readback still waits in `read_texture_bgra`.
+`decode_to_texture_into` writes into a caller-owned texture instead of
+allocating one.
+
+`decode_to_texture` is the fast path: 32-byte coefficient records and a float
+AAN IDCT. It is useful for previews and monitoring, but it is **not
+bit-identical** to the CPU decoder (coefficients 31..63 are dropped and AC is
+clamped to i8). `decode_to_texture_exact` uses 132-byte records, an integer
+IDCT and the CPU's DC-only shortcut; it matches the CPU output byte for byte.
+
 `encode_from_texture` accepts `Bgra8Unorm` or `Rgba8Unorm` with `COPY_SRC` and
 is followed by `save_to`. Use `encode_from_texture_opaque` to skip the alpha
 plane (libvmx `EncodeBGRX`). `encode_from_texture_submit` /
-`encode_submitted_finish` pipeline GPU FDCT against CPU entropy coding.
+`encode_submitted_finish` pipeline GPU FDCT against CPU entropy coding; up to
+three frames can be in flight. `encode_from_texture_view` accepts a
+caller-owned `TextureView` to avoid a per-frame view creation.
 
-CPU `encode_bgra` / `encode_bgrx` / `encode_uyvy` / `encode_yuy2` convert and
-FDCT per slice (same structure as libvmx). `encode_bgrx` encodes three planes
-only.
+`gpu_path_recommended(&adapter)` reports whether the wgpu path is expected to
+beat the CPU path for that adapter. On integrated GPUs (including Apple
+silicon) the CPU path is faster at 1080p and 2160p; the wgpu path is mainly a
+way to avoid host↔device transfers when the frame already lives on a discrete
+GPU. `gpu_stats()` returns the last decode/encode stage timings.
 
-Decode IDCT is a float AAN on the GPU (same dequant scale as CPU, 8-bit clamp
-at store). When the adapter exposes `BGRA8UNORM_STORAGE`, the compute pass
-writes the output texture directly (no buffer→texture copy). Encode samples the
-source texture and keeps integer FDCT + VMX quant so the bitstream is valid
-VMX.  
+Encode fuses the 16×8 Y/U/V/A tile into one dispatch and samples each source
+pixel once. Decode uses a 9-float shared-memory row stride to avoid bank
+conflicts. When the adapter exposes `BGRA8UNORM_STORAGE`, the compute pass
+writes the output texture directly (no buffer→texture copy). The headless
+device helper requests the adapter's real 8K buffer/storage limits.
+
 ```bash
 cargo test --features wgpu
 cargo run --release --example gpu_bench --features wgpu

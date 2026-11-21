@@ -544,3 +544,47 @@ fn gpu_idct_single_block_quality() {
         gpu::read_texture_bgra(&device, &queue, &frame.texture, frame.width, frame.height).unwrap();
     assert_psnr(&cpu_out, &gpu_out, 28.0, "16x16 GPU decode vs CPU");
 }
+
+#[test]
+fn gpu_encode_header_quality_follows_submit_time() {
+    let Some((device, queue)) = device() else {
+        eprintln!("skip: no wgpu adapter");
+        return;
+    };
+    let width = 64i32;
+    let height = 64i32;
+    let stride = width as usize * 4;
+    let src = sample_bgra(width, height);
+    let tex = gpu::upload_bgra_texture(&device, &queue, width as u32, height as u32, &src);
+
+    let mut enc = Codec::new(Config::new(width, height)).unwrap();
+    enc.set_quality(90);
+    let submitted = enc.quality();
+    enc.encode_from_texture_submit(&device, &queue, &tex, false)
+        .unwrap();
+    // A peer quality suggestion lands between submit and finish. The header
+    // must keep describing the coefficients that were already quantized.
+    enc.set_quality(40);
+    let later = enc.quality();
+    eprintln!("submitted={submitted} later={later}");
+    assert_ne!(later, submitted, "test needs a distinct quality step");
+    enc.encode_submitted_finish(&device).unwrap();
+    assert_eq!(
+        enc.quality(),
+        submitted,
+        "finish must restore the submit-time quality"
+    );
+    let mut bs = vec![0u8; 1 << 20];
+    let len = enc.save_to(&mut bs).unwrap();
+
+    let mut dec = Codec::new(Config::new(width, height)).unwrap();
+    dec.load_from(&bs[..len]).unwrap();
+    assert_eq!(
+        dec.quality(),
+        submitted,
+        "header quality must match the quantization"
+    );
+    let mut out = vec![0u8; stride * height as usize];
+    dec.decode_bgra(&mut out, stride).unwrap();
+    assert_psnr(&src, &out, 20.0, "mid-pipeline quality change");
+}

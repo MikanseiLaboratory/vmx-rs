@@ -220,6 +220,13 @@ struct PendingGpuEncode {
     slot: usize,
     include_alpha: bool,
     index: wgpu::SubmissionIndex,
+    /// Rate-control quality the coefficients were quantized with. `save_to`
+    /// writes it into the header, so it must not follow later changes.
+    quality: i32,
+    /// DC shift the coefficients were packed with.
+    dc_shift: i32,
+    /// Container format for the header (`Bgra` / `Bgrx`).
+    image_format: crate::types::ImageFormat,
 }
 
 #[repr(C)]
@@ -1281,6 +1288,11 @@ impl Codec {
         let t0 = std::time::Instant::now();
         let w = self.size.width as u32;
         let h = self.size.height as u32;
+        // Capture the rate-control state with the submission: a later
+        // `set_quality` (peer suggestion) must not relabel these coefficients.
+        let submit_quality = self.quality;
+        let submit_dc_shift = self.dc_shift;
+        let submit_format = self.image_format;
         let y_stride = self.planes.stride[0] as u32;
         let u_stride = self.planes.stride[1] as u32;
         let v_stride = self.planes.stride[2] as u32;
@@ -1397,6 +1409,9 @@ impl Codec {
             slot,
             include_alpha,
             index,
+            quality: submit_quality,
+            dc_shift: submit_dc_shift,
+            image_format: submit_format,
         });
         let submit_ms = t0.elapsed().as_secs_f64() * 1e3;
         if let Some(gpu) = self.gpu.as_mut() {
@@ -1416,6 +1431,12 @@ impl Codec {
             return Ok(());
         };
         let t0 = std::time::Instant::now();
+        // Restore the state this frame was quantized with so the header,
+        // the DC prediction and the container format describe its coefficients
+        // rather than whatever the rate control has moved on to since.
+        self.quality = pending.quality;
+        self.dc_shift = pending.dc_shift;
+        self.image_format = pending.image_format;
         let gpu = self.gpu.as_mut().ok_or_else(|| gpu_err("gpu session"))?;
         let y_n = gpu.y_coeff_count as usize;
         let u_n = gpu.u_coeff_count as usize;

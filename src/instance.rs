@@ -55,7 +55,7 @@ pub struct Codec {
     #[allow(dead_code)]
     profile: Profile,
     pub(crate) color_space: ColorSpace,
-    quality: i32,
+    pub(crate) quality: i32,
     min_quality: i32,
     pub(crate) dc_shift: i32,
     /// Host CPU feature flags.

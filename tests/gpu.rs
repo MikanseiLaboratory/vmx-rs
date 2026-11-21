@@ -84,6 +84,195 @@ fn gpu_decode_matches_cpu_quality() {
 }
 
 #[test]
+fn gpu_exact_decode_matches_cpu_bytes() {
+    let Some((device, queue)) = device() else {
+        eprintln!("skip: no wgpu adapter");
+        return;
+    };
+    let width = 64i32;
+    let height = 64i32;
+    let stride = width as usize * 4;
+    let src = sample_bgra(width, height);
+    let mut enc = Codec::new(Config {
+        width,
+        height,
+        profile: Profile::OmtHq,
+        color_space: Default::default(),
+    })
+    .unwrap();
+    enc.encode_bgra(&src, stride).unwrap();
+    let mut bitstream = vec![0u8; 2 << 20];
+    let len = enc.save_to(&mut bitstream).unwrap();
+
+    let mut cpu = Codec::new(Config::new(width, height)).unwrap();
+    cpu.load_from(&bitstream[..len]).unwrap();
+    let mut cpu_out = vec![0u8; stride * height as usize];
+    cpu.decode_bgra(&mut cpu_out, stride).unwrap();
+
+    let mut gpu_dec = Codec::new(Config::new(width, height)).unwrap();
+    gpu_dec.load_from(&bitstream[..len]).unwrap();
+    let frame = gpu_dec.decode_to_texture_exact(&device, &queue).unwrap();
+    let gpu_out =
+        gpu::read_texture_bgra(&device, &queue, &frame.texture, frame.width, frame.height).unwrap();
+    assert_eq!(cpu_out, gpu_out, "exact GPU decode must be byte-identical");
+}
+
+fn bgra_texture(device: &wgpu::Device, width: u32, height: u32) -> wgpu::Texture {
+    let mut usage = wgpu::TextureUsages::TEXTURE_BINDING
+        | wgpu::TextureUsages::COPY_DST
+        | wgpu::TextureUsages::COPY_SRC;
+    if device
+        .features()
+        .contains(wgpu::Features::BGRA8UNORM_STORAGE)
+    {
+        usage |= wgpu::TextureUsages::STORAGE_BINDING;
+    }
+    device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("test-bgra"),
+        size: wgpu::Extent3d {
+            width,
+            height,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::Bgra8Unorm,
+        usage,
+        view_formats: &[],
+    })
+}
+
+#[test]
+fn gpu_decode_into_matches_allocated() {
+    let Some((device, queue)) = device() else {
+        eprintln!("skip: no wgpu adapter");
+        return;
+    };
+    let width = 64i32;
+    let height = 64i32;
+    let stride = width as usize * 4;
+    let src = sample_bgra(width, height);
+    let mut enc = Codec::new(Config {
+        width,
+        height,
+        profile: Profile::OmtHq,
+        color_space: Default::default(),
+    })
+    .unwrap();
+    enc.encode_bgra(&src, stride).unwrap();
+    let mut bitstream = vec![0u8; 2 << 20];
+    let len = enc.save_to(&mut bitstream).unwrap();
+
+    let mut cpu = Codec::new(Config::new(width, height)).unwrap();
+    cpu.load_from(&bitstream[..len]).unwrap();
+    let mut cpu_out = vec![0u8; stride * height as usize];
+    cpu.decode_bgra(&mut cpu_out, stride).unwrap();
+
+    let mut gpu_dec = Codec::new(Config::new(width, height)).unwrap();
+    gpu_dec.load_from(&bitstream[..len]).unwrap();
+    let tex = bgra_texture(&device, width as u32, height as u32);
+    gpu_dec
+        .decode_to_texture_exact_into(&device, &queue, &tex)
+        .unwrap();
+    let gpu_out =
+        gpu::read_texture_bgra(&device, &queue, &tex, width as u32, height as u32).unwrap();
+    assert_eq!(cpu_out, gpu_out);
+}
+
+#[test]
+fn gpu_encode_from_view_matches_sync() {
+    let Some((device, queue)) = device() else {
+        eprintln!("skip: no wgpu adapter");
+        return;
+    };
+    let width = 32i32;
+    let height = 32i32;
+    let src = sample_bgra(width, height);
+    let tex = gpu::upload_bgra_texture(&device, &queue, width as u32, height as u32, &src);
+
+    let mut sync = Codec::new(Config::new(width, height)).unwrap();
+    sync.encode_from_texture_opaque(&device, &queue, &tex)
+        .unwrap();
+    let mut sync_bs = vec![0u8; 1 << 20];
+    let sync_len = sync.save_to(&mut sync_bs).unwrap();
+
+    let view = tex.create_view(&wgpu::TextureViewDescriptor::default());
+    let mut viewed = Codec::new(Config::new(width, height)).unwrap();
+    viewed
+        .encode_from_texture_view(&device, &queue, &tex, &view, false)
+        .unwrap();
+    let mut viewed_bs = vec![0u8; 1 << 20];
+    let viewed_len = viewed.save_to(&mut viewed_bs).unwrap();
+    assert_eq!(&sync_bs[..sync_len], &viewed_bs[..viewed_len]);
+}
+
+#[test]
+fn gpu_encode_three_frames_in_flight() {
+    let Some((device, queue)) = device() else {
+        eprintln!("skip: no wgpu adapter");
+        return;
+    };
+    let width = 32i32;
+    let height = 32i32;
+    let src = sample_bgra(width, height);
+    let tex = gpu::upload_bgra_texture(&device, &queue, width as u32, height as u32, &src);
+
+    let mut sync = Codec::new(Config::new(width, height)).unwrap();
+    sync.encode_from_texture_opaque(&device, &queue, &tex)
+        .unwrap();
+    let mut sync_bs = vec![0u8; 1 << 20];
+    let sync_len = sync.save_to(&mut sync_bs).unwrap();
+
+    let mut piped = Codec::new(Config::new(width, height)).unwrap();
+    for _ in 0..3 {
+        piped.set_quality(80);
+        piped
+            .encode_from_texture_submit(&device, &queue, &tex, false)
+            .unwrap();
+    }
+    for _ in 0..3 {
+        piped.encode_submitted_finish(&device).unwrap();
+        piped.set_quality(80);
+        let mut bs = vec![0u8; 1 << 20];
+        let len = piped.save_to(&mut bs).unwrap();
+        assert_eq!(&sync_bs[..sync_len], &bs[..len]);
+    }
+}
+
+#[test]
+fn gpu_stats_are_reported() {
+    let Some((device, queue)) = device() else {
+        eprintln!("skip: no wgpu adapter");
+        return;
+    };
+    let width = 32i32;
+    let height = 32i32;
+    let stride = width as usize * 4;
+    let src = sample_bgra(width, height);
+    let mut enc = Codec::new(Config::new(width, height)).unwrap();
+    enc.encode_bgra(&src, stride).unwrap();
+    let mut bitstream = vec![0u8; 1 << 20];
+    let len = enc.save_to(&mut bitstream).unwrap();
+
+    let mut dec = Codec::new(Config::new(width, height)).unwrap();
+    dec.load_from(&bitstream[..len]).unwrap();
+    let _ = dec.decode_to_texture(&device, &queue).unwrap();
+    let stats = dec.gpu_stats().expect("stats");
+    assert!(stats.decode_pack_ms >= 0.0);
+    assert!(stats.decode_dispatch_ms >= 0.0);
+
+    let tex = gpu::upload_bgra_texture(&device, &queue, width as u32, height as u32, &src);
+    let mut gpu_enc = Codec::new(Config::new(width, height)).unwrap();
+    gpu_enc
+        .encode_from_texture_opaque(&device, &queue, &tex)
+        .unwrap();
+    let stats = gpu_enc.gpu_stats().expect("stats");
+    assert!(stats.encode_submit_ms >= 0.0);
+    assert!(stats.encode_finish_ms >= 0.0);
+}
+
+#[test]
 fn gpu_preview_matches_cpu_quality() {
     let Some((device, queue)) = device() else {
         eprintln!("skip: no wgpu adapter");
@@ -219,6 +408,11 @@ fn gpu_encode_roundtrip_quality() {
     gpu_enc.encode_from_texture(&device, &queue, &tex).unwrap();
     let mut gpu_bs = vec![0u8; 1 << 20];
     let gpu_len = gpu_enc.save_to(&mut gpu_bs).unwrap();
+    assert_eq!(
+        &cpu_bs[..cpu_len],
+        &gpu_bs[..gpu_len],
+        "GPU encode must be byte-identical to CPU encode"
+    );
     let mut gpu_dec = Codec::new(Config::new(width, height)).unwrap();
     gpu_dec.load_from(&gpu_bs[..gpu_len]).unwrap();
     let mut gpu_out = vec![0u8; stride * height as usize];
@@ -270,6 +464,11 @@ fn gpu_opaque_encode_matches_cpu_bgrx() {
         .unwrap();
     let mut gpu_bs = vec![0u8; 1 << 20];
     let gpu_len = gpu_enc.save_to(&mut gpu_bs).unwrap();
+    assert_eq!(
+        &cpu_bs[..cpu_len],
+        &gpu_bs[..gpu_len],
+        "GPU opaque encode must be byte-identical to CPU BGRX encode"
+    );
     let mut gpu_dec = Codec::new(Config::new(width, height)).unwrap();
     gpu_dec.load_from(&gpu_bs[..gpu_len]).unwrap();
     let mut gpu_out = vec![0u8; stride * height as usize];
@@ -297,9 +496,12 @@ fn gpu_encode_submit_finish_matches_sync() {
     sync.encode_from_texture_opaque(&device, &queue, &tex)
         .unwrap();
     let mut sync_bs = vec![0u8; 1 << 20];
+    eprintln!("sync q before save={}", sync.quality());
     let sync_len = sync.save_to(&mut sync_bs).unwrap();
+    eprintln!("sync q after save={}", sync.quality());
 
     let mut piped = Codec::new(Config::new(width, height)).unwrap();
+    eprintln!("piped q new={}", piped.quality());
     piped
         .encode_from_texture_submit(&device, &queue, &tex, false)
         .unwrap();

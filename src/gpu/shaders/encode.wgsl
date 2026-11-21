@@ -29,13 +29,42 @@ struct EncodeParams {
     y_b: i32,
     a_plane_off: u32,
     a_coeff_off: u32,
-    src_rgba: u32,
+    include_alpha: u32,
 }
 
 @group(0) @binding(0) var<uniform> params: EncodeParams;
 @group(0) @binding(1) var src_tex: texture_2d<f32>;
-@group(0) @binding(2) var<storage, read> tables: array<i32>;
-@group(0) @binding(3) var<storage, read_write> coeffs: array<u32>;
+@group(0) @binding(2) var<uniform> enc_matrix_data: array<vec4<i32>, 48>;
+@group(0) @binding(3) var<storage, read_write> coeffs: array<vec4<u32>>;
+
+const FTAB_ALL: array<i32, 128> = array<i32, 128>(
+    16384, 16384, 22725, 19266, -8867, -21407, -22725, -12873,
+    16384, 16384, 12873, 4520, 21407, 8867, 19266, -4520,
+    16384, -16384, 12873, -22725, 21407, -8867, 19266, -22725,
+    -16384, 16384, 4520, 19266, 8867, -21407, 4520, -12873,
+    22725, 22725, 31521, 26722, -12299, -29692, -31521, -17855,
+    22725, 22725, 17855, 6270, 29692, 12299, 26722, -6270,
+    22725, -22725, 17855, -31521, 29692, -12299, 26722, -31521,
+    -22725, 22725, 6270, 26722, 12299, -29692, 6270, -17855,
+    21407, 21407, 29692, 25172, -11585, -27969, -29692, -16819,
+    21407, 21407, 16819, 5906, 27969, 11585, 25172, -5906,
+    21407, -21407, 16819, -29692, 27969, -11585, 25172, -29692,
+    -21407, 21407, 5906, 25172, 11585, -27969, 5906, -16819,
+    19266, 19266, 26722, 22654, -10426, -25172, -26722, -15137,
+    19266, 19266, 15137, 5315, 25172, 10426, 22654, -5315,
+    19266, -19266, 15137, -26722, 25172, -10426, 22654, -26722,
+    -19266, 19266, 5315, 22654, 10426, -25172, 5315, -15137,
+);
+const ZIGZAG_INV: array<u32, 64> = array<u32, 64>(
+    0, 1, 5, 6, 14, 15, 27, 28,
+    2, 4, 7, 13, 16, 26, 29, 42,
+    3, 8, 12, 17, 25, 30, 41, 43,
+    9, 11, 18, 24, 31, 40, 44, 53,
+    10, 19, 23, 32, 39, 45, 52, 54,
+    20, 22, 33, 38, 46, 51, 55, 60,
+    21, 34, 37, 47, 50, 56, 59, 61,
+    35, 36, 48, 49, 57, 58, 62, 63,
+);
 
 const SHIFT_FRW_COL: i32 = 3;
 const SHIFT_FRW_ROW: i32 = 16;
@@ -52,9 +81,9 @@ fn sat_add_i16(a: i32, b: i32) -> i32 { return sat_i16(a + b); }
 fn sat_sub_i16(a: i32, b: i32) -> i32 { return sat_i16(a - b); }
 fn mulhi_i16(a: i32, b: i32) -> i32 { return (a * b) >> 16u; }
 fn mulhi_u16(a: u32, b: u32) -> u32 { return (a * b) >> 16u; }
-fn ftab(i: u32) -> i32 { return tables[i]; }
-fn zigzag_inv(i: u32) -> u32 { return u32(tables[128u + i]); }
-fn enc_matrix(i: u32) -> u32 { return u32(tables[192u + i]); }
+fn ftab(i: u32) -> i32 { return FTAB_ALL[i]; }
+fn zigzag_inv(i: u32) -> u32 { return ZIGZAG_INV[i]; }
+fn enc_matrix(i: u32) -> u32 { return u32(enc_matrix_data[i / 4u][i % 4u]); }
 
 fn unorm_u8(v: f32) -> i32 {
     return i32(clamp(v, 0.0, 1.0) * 255.0 + 0.5);
@@ -226,102 +255,117 @@ fn spatial_quant(v: i32, i: u32) -> i32 {
     return i32(q);
 }
 
-fn fdct_quant_from_rows(rows: array<array<i32, 8>, 8>, out_base: u32) {
-    var cols: array<array<i32, 8>, 8>;
-    for (var x: u32 = 0u; x < 8u; x = x + 1u) {
-        let c = fdct_column_one(array<i32, 8>(rows[0][x], rows[1][x], rows[2][x], rows[3][x], rows[4][x], rows[5][x], rows[6][x], rows[7][x]));
-        for (var y: u32 = 0u; y < 8u; y = y + 1u) {
-            cols[y][x] = c[y];
+var<workgroup> sPlane: array<i32, 384>;
+var<workgroup> sTmp: array<i32, 384>;
+var<workgroup> sZig: array<i32, 384>;
+
+@compute @workgroup_size(64)
+fn encode_tile(
+    @builtin(local_invocation_index) lid: u32,
+    @builtin(workgroup_id) wid: vec3<u32>,
+) {
+    let tiles_x = (params.y_blocks_x + 1u) / 2u;
+    let cx = wid.x % tiles_x;
+    let cy = wid.x / tiles_x;
+
+    // Load phase: 64 threads each load one horizontal pair (2 pixels).
+    let pair = lid;
+    let row = pair / 8u;
+    let pair_x = pair % 8u;
+    let px = pair_x * 2u;
+    let x0 = cx * 16u + px;
+    let y = cy * 8u + row;
+    let p0 = load_rgba(x0, y);
+    let p1 = load_rgba(x0 + 1u, y);
+    let y0 = sat_add_i16(rgb_to_y(p0.x, p0.y, p0.z), params.add_y);
+    let y1 = sat_add_i16(rgb_to_y(p1.x, p1.y, p1.z), params.add_y);
+    let bx = px / 8u;
+    let bxx = px % 8u;
+    sPlane[bx * 64u + row * 8u + bxx] = y0;
+    sPlane[bx * 64u + row * 8u + bxx + 1u] = y1;
+    let u0 = rgb_to_chroma(p0.x, p0.y, p0.z, params.u_r, params.u_g, params.u_b);
+    let u1 = rgb_to_chroma(p1.x, p1.y, p1.z, params.u_r, params.u_g, params.u_b);
+    let v0 = rgb_to_chroma(p0.x, p0.y, p0.z, params.v_r, params.v_g, params.v_b);
+    let v1 = rgb_to_chroma(p1.x, p1.y, p1.z, params.v_r, params.v_g, params.v_b);
+    sPlane[128u + row * 8u + pair_x] = sat_add_i16(clamp((u0 + u1) >> 1u, 0, 255), params.add_uv);
+    sPlane[192u + row * 8u + pair_x] = sat_add_i16(clamp((v0 + v1) >> 1u, 0, 255), params.add_uv);
+    if (params.include_alpha != 0u) {
+        sPlane[256u + bx * 64u + row * 8u + bxx] = sat_add_i16(p0.w, params.add_y);
+        sPlane[256u + bx * 64u + row * 8u + bxx + 1u] = sat_add_i16(p1.w, params.add_y);
+    }
+    workgroupBarrier();
+
+    // FDCT phase: 8 threads per block, 6 blocks (Y0,Y1,U,V,A0,A1).
+    let b = lid / 8u;
+    let t = lid % 8u;
+    let block_y = cy * params.y_blocks_x + cx * 2u;
+    let block_u = cy * params.u_blocks_x + cx;
+    var valid = false;
+    var out_base = 0u;
+    if (b == 0u) {
+        valid = (cx * 2u) < params.y_blocks_x;
+        out_base = block_y * 64u;
+    } else if (b == 1u) {
+        valid = (cx * 2u + 1u) < params.y_blocks_x;
+        out_base = (block_y + 1u) * 64u;
+    } else if (b == 2u) {
+        valid = cx < params.u_blocks_x;
+        out_base = params.u_coeff_off + block_u * 64u;
+    } else if (b == 3u) {
+        valid = cx < params.u_blocks_x;
+        out_base = params.v_coeff_off + block_u * 64u;
+    } else if (b == 4u) {
+        valid = (cx * 2u) < params.y_blocks_x && params.include_alpha != 0u;
+        out_base = params.a_coeff_off + block_y * 64u;
+    } else if (b == 5u) {
+        valid = (cx * 2u + 1u) < params.y_blocks_x && params.include_alpha != 0u;
+        out_base = params.a_coeff_off + (block_y + 1u) * 64u;
+    }
+
+    let src = b * 64u;
+    if (valid) {
+        let c = fdct_column_one(array<i32, 8>(
+            sPlane[src + 0u * 8u + t], sPlane[src + 1u * 8u + t],
+            sPlane[src + 2u * 8u + t], sPlane[src + 3u * 8u + t],
+            sPlane[src + 4u * 8u + t], sPlane[src + 5u * 8u + t],
+            sPlane[src + 6u * 8u + t], sPlane[src + 7u * 8u + t],
+        ));
+        for (var k: u32 = 0u; k < 8u; k = k + 1u) {
+            sTmp[src + k * 8u + t] = c[k];
         }
     }
+    workgroupBarrier();
+
     let ftab_order = array<u32, 8>(0u, 1u, 2u, 3u, 0u, 3u, 2u, 1u);
-    var spatial: array<i32, 64>;
-    for (var y: u32 = 0u; y < 8u; y = y + 1u) {
-        let row_out = fdct_row(cols[y], ftab_order[y] * 32u);
+    if (valid) {
+        let row_out = fdct_row(array<i32, 8>(
+            sTmp[src + t * 8u], sTmp[src + t * 8u + 1u],
+            sTmp[src + t * 8u + 2u], sTmp[src + t * 8u + 3u],
+            sTmp[src + t * 8u + 4u], sTmp[src + t * 8u + 5u],
+            sTmp[src + t * 8u + 6u], sTmp[src + t * 8u + 7u],
+        ), ftab_order[t] * 32u);
         for (var x: u32 = 0u; x < 8u; x = x + 1u) {
-            spatial[y * 8u + x] = row_out[x];
+            sZig[src + zigzag_inv(t * 8u + x)] = spatial_quant(row_out[x], t * 8u + x);
         }
     }
-    var zig: array<i32, 64>;
-    for (var i: u32 = 0u; i < 64u; i = i + 1u) {
-        zig[zigzag_inv(i)] = spatial_quant(spatial[i], i);
-    }
-    let word_base = out_base >> 1u;
-    for (var w: u32 = 0u; w < 32u; w = w + 1u) {
-        let a = u32(zig[w * 2u]) & 0xFFFFu;
-        let b = u32(zig[w * 2u + 1u]) & 0xFFFFu;
-        coeffs[word_base + w] = a | (b << 16u);
-    }
-}
+    workgroupBarrier();
 
-@compute @workgroup_size(64)
-fn fdct_y(@builtin(global_invocation_id) gid: vec3<u32>) {
-    let block = gid.x;
-    let count = params.y_blocks_x * params.y_blocks_y;
-    if (block >= count) { return; }
-    let bx = block % params.y_blocks_x;
-    let by = block / params.y_blocks_x;
-    let px = bx * 8u;
-    let py = by * 8u;
-    var rows: array<array<i32, 8>, 8>;
-    for (var y: u32 = 0u; y < 8u; y = y + 1u) {
-        for (var x: u32 = 0u; x < 8u; x = x + 1u) {
-            rows[y][x] = sample_y(px + x, py + y);
-        }
+    if (valid) {
+        let word_base = out_base >> 1u;
+        let w = t * 4u;
+        let a0 = u32(sZig[src + w * 2u]) & 0xFFFFu;
+        let b0 = u32(sZig[src + w * 2u + 1u]) & 0xFFFFu;
+        let a1 = u32(sZig[src + (w + 1u) * 2u]) & 0xFFFFu;
+        let b1 = u32(sZig[src + (w + 1u) * 2u + 1u]) & 0xFFFFu;
+        let a2 = u32(sZig[src + (w + 2u) * 2u]) & 0xFFFFu;
+        let b2 = u32(sZig[src + (w + 2u) * 2u + 1u]) & 0xFFFFu;
+        let a3 = u32(sZig[src + (w + 3u) * 2u]) & 0xFFFFu;
+        let b3 = u32(sZig[src + (w + 3u) * 2u + 1u]) & 0xFFFFu;
+        coeffs[(word_base / 4u) + t] = vec4<u32>(
+            a0 | (b0 << 16u),
+            a1 | (b1 << 16u),
+            a2 | (b2 << 16u),
+            a3 | (b3 << 16u),
+        );
     }
-    fdct_quant_from_rows(rows, block * 64u);
-}
-
-@compute @workgroup_size(64)
-fn fdct_u(@builtin(global_invocation_id) gid: vec3<u32>) {
-    let block = gid.x;
-    let count = params.u_blocks_x * params.u_blocks_y;
-    if (block >= count) { return; }
-    let bx = block % params.u_blocks_x;
-    let by = block / params.u_blocks_x;
-    let cx = bx * 8u;
-    let cy = by * 8u;
-    var rows: array<array<i32, 8>, 8>;
-    for (var y: u32 = 0u; y < 8u; y = y + 1u) {
-        for (var x: u32 = 0u; x < 8u; x = x + 1u) {
-            rows[y][x] = sample_u(cx + x, cy + y);
-        }
-    }
-    fdct_quant_from_rows(rows, params.u_coeff_off + block * 64u);
-}
-
-@compute @workgroup_size(64)
-fn fdct_v(@builtin(global_invocation_id) gid: vec3<u32>) {
-    let block = gid.x;
-    let count = params.u_blocks_x * params.u_blocks_y;
-    if (block >= count) { return; }
-    let bx = block % params.u_blocks_x;
-    let by = block / params.u_blocks_x;
-    let cx = bx * 8u;
-    let cy = by * 8u;
-    var rows: array<array<i32, 8>, 8>;
-    for (var y: u32 = 0u; y < 8u; y = y + 1u) {
-        for (var x: u32 = 0u; x < 8u; x = x + 1u) {
-            rows[y][x] = sample_v(cx + x, cy + y);
-        }
-    }
-    fdct_quant_from_rows(rows, params.v_coeff_off + block * 64u);
-}
-
-@compute @workgroup_size(64)
-fn fdct_a(@builtin(global_invocation_id) gid: vec3<u32>) {
-    let block = gid.x;
-    let count = params.y_blocks_x * params.y_blocks_y;
-    if (block >= count) { return; }
-    let bx = block % params.y_blocks_x;
-    let by = block / params.y_blocks_x;
-    let px = bx * 8u;
-    let py = by * 8u;
-    var rows: array<array<i32, 8>, 8>;
-    for (var y: u32 = 0u; y < 8u; y = y + 1u) {
-        for (var x: u32 = 0u; x < 8u; x = x + 1u) {
-            rows[y][x] = sample_a(px + x, py + y);
-        }
-    }
-    fdct_quant_from_rows(rows, params.a_coeff_off + block * 64u);
 }

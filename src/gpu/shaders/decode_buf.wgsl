@@ -6,26 +6,28 @@ fn main_buf(
     @builtin(workgroup_id) wid: vec3<u32>,
 ) {
     let tile = wid.x;
+    let u_bx = max(params.u_blocks_x, 1u);
+    let cx = tile % u_bx;
+    let cy = tile / u_bx;
     run_idct(lid, tile);
-    if (lid < 16u) {
-        let t = tile_px(lid, tile);
-        if (t.w != 0u) {
-            let px = t.x;
-            let py0 = t.y;
-            let lx = t.z;
-            let ybase = select(0u, 64u, lx >= 8u);
-            let x8 = lx % 8u;
-            let ux = lx / 2u;
-            for (var k: u32 = 0u; k < 8u; k = k + 1u) {
-                let py = py0 + k;
-                if (py >= params.height) {
-                    break;
-                }
-                let yy = u32(clamp(sm[ybase + k * 8u + x8], 0.0, 255.0));
-                let cb = i32(clamp(sm[128u + k * 8u + ux], 0.0, 255.0)) - 128;
-                let cr = i32(clamp(sm[192u + k * 8u + ux], 0.0, 255.0)) - 128;
-                bgra[py * params.dst_stride + px] = yuv_to_packed(yy, cb, cr);
+    let lx = lid % 16u;
+    let row_group = lid / 16u;
+    let px = cx * 16u + lx;
+    let py0 = cy * 8u + row_group * 4u;
+    if (px < params.width) {
+        let ybase = select(0u, 72u, lx >= 8u);
+        let x8 = lx % 8u;
+        let ux = lx / 2u;
+        for (var k: u32 = 0u; k < 4u; k = k + 1u) {
+            let sy = row_group * 4u + k;
+            let py = py0 + k;
+            if (py >= params.height) {
+                break;
             }
+            let yy = u32(clamp(sm[ybase + sy * 9u + x8], 0.0, 255.0));
+            let cb = i32(clamp(sm[144u + sy * 9u + ux], 0.0, 255.0)) - 128;
+            let cr = i32(clamp(sm[216u + sy * 9u + ux], 0.0, 255.0)) - 128;
+            bgra[py * params.dst_stride + px] = yuv_to_packed(yy, cb, cr);
         }
     }
 }

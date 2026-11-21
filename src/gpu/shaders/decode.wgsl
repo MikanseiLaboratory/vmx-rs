@@ -18,7 +18,7 @@ struct FusedParams {
 }
 
 @group(0) @binding(0) var<uniform> params: FusedParams;
-@group(0) @binding(1) var<storage, read> matrix: array<i32>;
+@group(0) @binding(1) var<uniform> matrix: array<vec4<i32>, 16>;
 @group(0) @binding(2) var<storage, read> coeffs: array<u32>;
 
 const IDCT_TG1: f32 = 13036.0 / 65536.0;
@@ -62,7 +62,7 @@ const TAB35: array<f32, 32> = array<f32, 32>(
     15137.0, 5315.0, -26722.0, -15137.0, 5315.0, 22654.0, 22654.0, -26722.0,
 );
 
-var<workgroup> sm: array<f32, 256>;
+var<workgroup> sm: array<f32, 288>;
 
 fn idct_tab(row: u32, i: u32) -> f32 {
     switch row {
@@ -100,21 +100,21 @@ fn load_coeff(plane: u32, block: u32, zig: u32) -> i32 {
 }
 
 fn dec_matrix(i: u32) -> i32 {
-    return matrix[i];
+    return matrix[i / 4u][i % 4u];
 }
 
-fn idct_row(x0: f32, x1: f32, x2: f32, x3: f32, x4: f32, x5: f32, x6: f32, x7: f32, row: u32) -> array<f32, 8> {
+fn idct_row(x0: f32, x1: f32, x2: f32, x3: f32, x4: f32, x5: f32, x6: f32, x7: f32, tab: array<f32, 32>) -> array<f32, 8> {
     var out: array<f32, 8>;
     for (var i: u32 = 0u; i < 4u; i = i + 1u) {
-        let even = x0 * idct_tab(row, 2u * i)
-            + x2 * idct_tab(row, 2u * i + 1u)
+        let even = x0 * tab[2u * i]
+            + x2 * tab[2u * i + 1u]
             + 1024.0
-            + x4 * idct_tab(row, 8u + 2u * i)
-            + x6 * idct_tab(row, 8u + 2u * i + 1u);
-        let odd = x5 * idct_tab(row, 24u + 2u * i)
-            + x7 * idct_tab(row, 24u + 2u * i + 1u)
-            + x1 * idct_tab(row, 16u + 2u * i)
-            + x3 * idct_tab(row, 16u + 2u * i + 1u);
+            + x4 * tab[8u + 2u * i]
+            + x6 * tab[8u + 2u * i + 1u];
+        let odd = x5 * tab[24u + 2u * i]
+            + x7 * tab[24u + 2u * i + 1u]
+            + x1 * tab[16u + 2u * i]
+            + x3 * tab[16u + 2u * i + 1u];
         out[i] = (even + odd) / 2048.0;
         out[7u - i] = (even - odd) / 2048.0;
     }
@@ -217,7 +217,7 @@ fn run_idct(lid: u32, tile: u32) {
 
     let plane = lid / 8u;
     let t = lid % 8u;
-    let base = plane * 64u;
+    let base = plane * 72u;
 
     var block = 0u;
     var in_range = false;
@@ -241,46 +241,41 @@ fn run_idct(lid: u32, tile: u32) {
             let i = t * 8u + k;
             let c = load_coeff(plane, block, ZIGZAG_INV[i]);
             let dq = ((c * dec_matrix(i)) << 16u) >> 16u;
-            sm[base + i] = f32(dq) / 16.0;
+            sm[base + t * 9u + k] = f32(dq) / 16.0;
         }
     } else {
         for (var k: u32 = 0u; k < 8u; k = k + 1u) {
-            sm[base + t * 8u + k] = 0.0;
+            sm[base + t * 9u + k] = 0.0;
         }
     }
     workgroupBarrier();
 
     if (in_range) {
+        var tab: array<f32, 32>;
+        if (t == 0u || t == 4u) { tab = TAB04; }
+        else if (t == 1u || t == 7u) { tab = TAB17; }
+        else if (t == 2u || t == 6u) { tab = TAB26; }
+        else { tab = TAB35; }
         let row = idct_row(
-            sm[base + t * 8u], sm[base + t * 8u + 1u], sm[base + t * 8u + 2u], sm[base + t * 8u + 3u],
-            sm[base + t * 8u + 4u], sm[base + t * 8u + 5u], sm[base + t * 8u + 6u], sm[base + t * 8u + 7u],
-            t,
+            sm[base + t * 9u], sm[base + t * 9u + 1u], sm[base + t * 9u + 2u], sm[base + t * 9u + 3u],
+            sm[base + t * 9u + 4u], sm[base + t * 9u + 5u], sm[base + t * 9u + 6u], sm[base + t * 9u + 7u],
+            tab,
         );
         for (var k: u32 = 0u; k < 8u; k = k + 1u) {
-            sm[base + t * 8u + k] = row[k];
+            sm[base + t * 9u + k] = row[k];
         }
     }
     workgroupBarrier();
 
     if (in_range) {
         let col = idct_column(
-            sm[base + t], sm[base + 8u + t], sm[base + 16u + t], sm[base + 24u + t],
-            sm[base + 32u + t], sm[base + 40u + t], sm[base + 48u + t], sm[base + 56u + t],
+            sm[base + t], sm[base + 9u + t], sm[base + 18u + t], sm[base + 27u + t],
+            sm[base + 36u + t], sm[base + 45u + t], sm[base + 54u + t], sm[base + 63u + t],
             add_val,
         );
         for (var k: u32 = 0u; k < 8u; k = k + 1u) {
-            sm[base + k * 8u + t] = col[k];
+            sm[base + k * 9u + t] = col[k];
         }
     }
     workgroupBarrier();
-}
-
-fn tile_px(lid: u32, tile: u32) -> vec4<u32> {
-    let u_bx = max(params.u_blocks_x, 1u);
-    let cx = tile % u_bx;
-    let cy = tile / u_bx;
-    let lx = lid;
-    let px = cx * 16u + lx;
-    let py0 = cy * 8u;
-    return vec4<u32>(px, py0, lx, u32(px < params.width));
 }

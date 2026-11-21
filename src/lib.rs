@@ -28,7 +28,7 @@ pub use color::convert::uyvy_to_bgra;
 pub use container::preview_bitstream_length;
 pub use error::{Result, VmxError};
 #[cfg(feature = "wgpu")]
-pub use gpu::{GpuFrame, request_headless_device};
+pub use gpu::{GpuDecodeMode, GpuFrame, GpuStats, gpu_path_recommended, request_headless_device};
 pub use instance::{Codec, Config};
 pub use simd::{SimdCapabilities, SimdPath};
 pub use thread_pool::{clear_shared_thread_pool, use_shared_thread_pool};

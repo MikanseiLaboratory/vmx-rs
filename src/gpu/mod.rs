@@ -1,16 +1,42 @@
 pub(crate) mod pack;
 
+use std::collections::VecDeque;
+
 use crate::codec::slice::{decode_slices_coeffs, encode_slices_from_coeffs};
 use crate::color::convert::select_yuv_rgb;
 use crate::error::{Result, VmxError};
 use crate::instance::Codec;
-use crate::tables::{
-    FTAB1_128, FTAB2_128, FTAB3_128, FTAB4_128, RGB_YUV_601, RGB_YUV_709, ZIGZAG_INV,
-};
+use crate::tables::{RGB_YUV_601, RGB_YUV_709};
 use crate::types::{ColorSpace, align_up};
 
 const RING: usize = 3;
 const COPY_ALIGN: u32 = 256;
+
+/// Coefficient/IDCT path used by [`Codec::decode_to_texture_with_mode`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum GpuDecodeMode {
+    /// 32-byte coefficient records and a float IDCT. Fast, but not bit-exact
+    /// with the CPU decoder: coefficients 31..63 are dropped and AC is
+    /// clamped to i8.
+    #[default]
+    Fast,
+    /// 132-byte coefficient records and an integer IDCT. Bit-exact with the
+    /// CPU decoder, at the cost of a larger upload.
+    Exact,
+}
+
+/// Last measured timings for this codec's GPU session.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct GpuStats {
+    /// CPU entropy decode + coefficient pack for the last decode.
+    pub decode_pack_ms: f64,
+    /// Matrix/UBO writes and command submission for the last decode.
+    pub decode_dispatch_ms: f64,
+    /// Command recording + submit for the last encode.
+    pub encode_submit_ms: f64,
+    /// Map wait + CPU Golomb encode for the last finished encode.
+    pub encode_finish_ms: f64,
+}
 
 /// Decoded (or preview) frame on the caller's device.
 #[derive(Debug, Clone)]
@@ -28,6 +54,23 @@ pub struct GpuFrame {
     /// The texture is written once and not reused by later decodes. Hold it
     /// across frames without copying.
     pub submission_index: wgpu::SubmissionIndex,
+}
+
+/// Whether the wgpu path is expected to beat the CPU path for this adapter.
+///
+/// Measured on the audit hosts: an Apple M3 (integrated) loses to the CPU at
+/// 1080p and 2160p for both decode and encode, even when the CPU path includes
+/// a texture upload. An NVIDIA L4 (discrete) only wins when the frame already
+/// lives on the GPU (the CPU+transfer column); its host-CPU path is faster.
+///
+/// Callers should pass their own adapter and prefer the CPU path when this
+/// returns `false`, unless they specifically need the result to stay on the
+/// device and have measured the tradeoff themselves.
+pub fn gpu_path_recommended(adapter: &wgpu::Adapter) -> bool {
+    matches!(
+        adapter.get_info().device_type,
+        wgpu::DeviceType::DiscreteGpu | wgpu::DeviceType::VirtualGpu
+    )
 }
 
 /// Try to obtain a headless wgpu device (WARP / llvmpipe / discrete). `None` if none.
@@ -81,10 +124,17 @@ pub fn request_headless_device()
     {
         required |= wgpu::Features::BGRA8UNORM_STORAGE;
     }
+    // Keep the default limits for small frames, but let 8K coefficient
+    // buffers use the adapter's real buffer/storage limits.
+    let mut limits = wgpu::Limits::default();
+    let adapter_limits = adapter.limits();
+    limits.max_buffer_size = adapter_limits.max_buffer_size;
+    limits.max_storage_buffer_binding_size = adapter_limits.max_storage_buffer_binding_size;
+    limits.max_texture_dimension_2d = adapter_limits.max_texture_dimension_2d;
     let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
         label: Some("vmx-headless"),
         required_features: required,
-        required_limits: wgpu::Limits::default(),
+        required_limits: limits,
         memory_hints: wgpu::MemoryHints::Performance,
         trace: wgpu::Trace::Off,
         ..Default::default()
@@ -202,19 +252,23 @@ struct EncodeParams {
     y_b: i32,
     a_plane_off: u32,
     a_coeff_off: u32,
-    src_rgba: u32,
+    include_alpha: u32,
 }
 
 #[allow(dead_code)]
 pub(crate) struct GpuSession {
+    device: wgpu::Device,
     width: u32,
     height: u32,
+    mode: GpuDecodeMode,
+    stats: GpuStats,
     storage_out: bool,
     y_blocks_x: u32,
     u_blocks_x: u32,
     u_blocks_y: u32,
     u_word_off: u32,
     v_word_off: u32,
+    pack_bytes: u32,
     coeff_in: wgpu::Buffer,
     matrix_buf: wgpu::Buffer,
     last_matrix: [i32; 64],
@@ -227,16 +281,16 @@ pub(crate) struct GpuSession {
     pack: Vec<u8>,
     preview_cpu: Vec<u8>,
     encode_layout: wgpu::BindGroupLayout,
-    fdct_y_pipeline: wgpu::ComputePipeline,
-    fdct_u_pipeline: wgpu::ComputePipeline,
-    fdct_v_pipeline: wgpu::ComputePipeline,
-    fdct_a_pipeline: wgpu::ComputePipeline,
+    encode_tile_pipeline: wgpu::ComputePipeline,
     enc_ubo: wgpu::Buffer,
-    enc_tables: wgpu::Buffer,
-    coeffs: wgpu::Buffer,
+    enc_matrix_buf: wgpu::Buffer,
+    coeff_out: Vec<wgpu::Buffer>,
     coeff_read: Vec<wgpu::Buffer>,
+    enc_view: Option<(wgpu::Texture, wgpu::TextureView)>,
+    enc_bind_view: Option<wgpu::TextureView>,
+    enc_binds: Vec<Option<wgpu::BindGroup>>,
     enc_ring: usize,
-    pending_encode: Option<PendingGpuEncode>,
+    pending_encode: VecDeque<PendingGpuEncode>,
     last_enc_params: Option<EncodeParams>,
     last_enc_matrix_idx: Option<usize>,
     y_coeff_count: u32,
@@ -334,23 +388,33 @@ impl GpuSession {
         height: u32,
         _preview_w: u32,
         preview_h: u32,
+        mode: GpuDecodeMode,
     ) -> Result<Self> {
         let storage_out = device
             .features()
             .contains(wgpu::Features::BGRA8UNORM_STORAGE);
 
-        let decode_src: std::borrow::Cow<str> = if storage_out {
-            concat!(
+        let decode_src: std::borrow::Cow<str> = match (mode, storage_out) {
+            (GpuDecodeMode::Fast, true) => concat!(
                 include_str!("shaders/decode.wgsl"),
                 include_str!("shaders/decode_tex.wgsl")
             )
-            .into()
-        } else {
-            concat!(
+            .into(),
+            (GpuDecodeMode::Fast, false) => concat!(
                 include_str!("shaders/decode.wgsl"),
                 include_str!("shaders/decode_buf.wgsl")
             )
-            .into()
+            .into(),
+            (GpuDecodeMode::Exact, true) => concat!(
+                include_str!("shaders/decode_exact.wgsl"),
+                include_str!("shaders/decode_exact_tex.wgsl")
+            )
+            .into(),
+            (GpuDecodeMode::Exact, false) => concat!(
+                include_str!("shaders/decode_exact.wgsl"),
+                include_str!("shaders/decode_exact_buf.wgsl")
+            )
+            .into(),
         };
         let fused_mod = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("vmx-decode"),
@@ -366,7 +430,7 @@ impl GpuSession {
                 label: Some("vmx-fused-tex-bgl"),
                 entries: &[
                     ubo_entry(0),
-                    storage_entry(1, true),
+                    ubo_entry(1),
                     storage_entry(2, true),
                     storage_tex_entry(3),
                 ],
@@ -377,7 +441,7 @@ impl GpuSession {
                 label: Some("vmx-fused-buf-bgl"),
                 entries: &[
                     ubo_entry(0),
-                    storage_entry(1, true),
+                    ubo_entry(1),
                     storage_entry(2, true),
                     storage_entry(4, false),
                 ],
@@ -389,7 +453,7 @@ impl GpuSession {
             entries: &[
                 ubo_entry(0),
                 sampled_tex_entry(1),
-                storage_entry(2, true),
+                ubo_entry(2),
                 storage_entry(3, false),
             ],
         });
@@ -407,14 +471,13 @@ impl GpuSession {
 
         let fused_pipeline =
             compute_pipeline(device, &fused_pl, &fused_mod, fused_entry, "vmx-fused-pipe");
-        let fdct_y_pipeline =
-            compute_pipeline(device, &encode_pl, &encode_mod, "fdct_y", "vmx-fdct-y");
-        let fdct_u_pipeline =
-            compute_pipeline(device, &encode_pl, &encode_mod, "fdct_u", "vmx-fdct-u");
-        let fdct_v_pipeline =
-            compute_pipeline(device, &encode_pl, &encode_mod, "fdct_v", "vmx-fdct-v");
-        let fdct_a_pipeline =
-            compute_pipeline(device, &encode_pl, &encode_mod, "fdct_a", "vmx-fdct-a");
+        let encode_tile_pipeline = compute_pipeline(
+            device,
+            &encode_pl,
+            &encode_mod,
+            "encode_tile",
+            "vmx-encode-tile",
+        );
 
         let ys = y_stride(width);
         let us = uv_stride(width);
@@ -423,11 +486,25 @@ impl GpuSession {
         let y_by = (ah / 8).max(1);
         let u_bx = (us / 8).max(1);
         let u_by = (ah / 8).max(1);
-        let y_pack = y_bx * y_by * pack::PACK_BYTES as u32;
-        let u_pack = u_bx * u_by * pack::PACK_BYTES as u32;
+        let pack_bytes = match mode {
+            GpuDecodeMode::Fast => pack::PACK_BYTES_FAST,
+            GpuDecodeMode::Exact => pack::PACK_BYTES_EXACT,
+        } as u32;
+        let y_pack = y_bx * y_by * pack_bytes;
+        let u_pack = u_bx * u_by * pack_bytes;
         let v_pack = u_pack;
         let u_word_off = y_pack / 4;
         let v_word_off = (y_pack + u_pack) / 4;
+        let coeff_bytes = u64::from(y_pack + u_pack + v_pack);
+        let limits = device.limits();
+        if coeff_bytes > limits.max_buffer_size
+            || coeff_bytes > limits.max_storage_buffer_binding_size
+        {
+            return Err(gpu_err(format!(
+                "GPU coefficient buffer {coeff_bytes} bytes exceeds device limits (buffer {}, storage {})",
+                limits.max_buffer_size, limits.max_storage_buffer_binding_size
+            )));
+        }
 
         let coeff_in = buf(
             device,
@@ -438,7 +515,7 @@ impl GpuSession {
         let matrix_buf = buf(
             device,
             64 * 4,
-            wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             "decode-matrix",
         );
         let fused_ubo = buf(
@@ -487,32 +564,22 @@ impl GpuSession {
             wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             "enc-ubo",
         );
-        let enc_tables = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("enc-tables"),
-            size: 384 * 4,
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: true,
-        });
-        {
-            let mut data = enc_tables
-                .slice(..)
-                .get_mapped_range_mut()
-                .map_err(|e| gpu_err(format!("enc-tables map: {e}")))?;
-            let mut tables = Vec::with_capacity(384);
-            for t in [&FTAB1_128, &FTAB2_128, &FTAB3_128, &FTAB4_128] {
-                tables.extend(t.iter().map(|&v| i32::from(v)));
-            }
-            tables.extend(ZIGZAG_INV.iter().map(|&v| i32::from(v)));
-            tables.resize(384, 0);
-            data.copy_from_slice(bytemuck::cast_slice(&tables));
-        }
-        enc_tables.unmap();
-        let coeffs = buf(
+        let enc_matrix_buf = buf(
             device,
-            u64::from(coeff_i16) * 2,
-            wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
-            "coeffs",
+            192 * 4,
+            wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            "enc-matrix",
         );
+        let coeff_out = (0..RING)
+            .map(|i| {
+                buf(
+                    device,
+                    u64::from(coeff_i16) * 2,
+                    wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+                    &format!("coeff-out-{i}"),
+                )
+            })
+            .collect();
         let coeff_read = (0..RING)
             .map(|i| {
                 buf(
@@ -525,14 +592,18 @@ impl GpuSession {
             .collect();
 
         Ok(Self {
+            device: device.clone(),
             width,
             height,
+            mode,
+            stats: GpuStats::default(),
             storage_out,
             y_blocks_x: y_bx,
             u_blocks_x: u_bx,
             u_blocks_y: u_by,
             u_word_off,
             v_word_off,
+            pack_bytes,
             coeff_in,
             matrix_buf,
             last_matrix: [0; 64],
@@ -545,16 +616,16 @@ impl GpuSession {
             pack: Vec::new(),
             preview_cpu: Vec::new(),
             encode_layout,
-            fdct_y_pipeline,
-            fdct_u_pipeline,
-            fdct_v_pipeline,
-            fdct_a_pipeline,
+            encode_tile_pipeline,
             enc_ubo,
-            enc_tables,
-            coeffs,
+            enc_matrix_buf,
+            coeff_out,
             coeff_read,
+            enc_view: None,
+            enc_bind_view: None,
+            enc_binds: (0..RING).map(|_| None).collect(),
             enc_ring: 0,
-            pending_encode: None,
+            pending_encode: VecDeque::new(),
             last_enc_params: None,
             last_enc_matrix_idx: None,
             y_coeff_count,
@@ -642,19 +713,24 @@ fn can_sample_encode(texture: &wgpu::Texture) -> bool {
 }
 
 impl Codec {
-    fn ensure_gpu(&mut self, device: &wgpu::Device) -> Result<()> {
+    fn ensure_gpu(&mut self, device: &wgpu::Device, mode: GpuDecodeMode) -> Result<()> {
         let w = self.size.width as u32;
         let h = self.size.height as u32;
         let pw = self.preview_size.width as u32;
         let ph = self.preview_size.height as u32;
         let need = match &self.gpu {
-            Some(g) => g.width != w || g.height != h,
+            Some(g) => g.device != *device || g.width != w || g.height != h || g.mode != mode,
             None => true,
         };
         if need {
-            self.gpu = Some(GpuSession::new(device, w, h, pw, ph)?);
+            self.gpu = Some(GpuSession::new(device, w, h, pw, ph, mode)?);
         }
         Ok(())
+    }
+
+    /// Timings from the last GPU decode/encode on this codec.
+    pub fn gpu_stats(&self) -> Option<GpuStats> {
+        self.gpu.as_ref().map(|g| g.stats)
     }
 
     /// Decode the loaded bitstream into a BGRA texture on `device`.
@@ -667,37 +743,162 @@ impl Codec {
         device: &wgpu::Device,
         queue: &wgpu::Queue,
     ) -> Result<GpuFrame> {
-        self.ensure_gpu(device)?;
+        self.decode_to_texture_with_mode(device, queue, GpuDecodeMode::Fast)
+    }
+
+    /// Decode the loaded bitstream into a BGRA texture, bit-identical to the
+    /// CPU decoder.
+    ///
+    /// Uses 132-byte coefficient records and an integer IDCT. The upload is
+    /// larger than [`Self::decode_to_texture`], so prefer the fast path when
+    /// approximate pixels are acceptable.
+    pub fn decode_to_texture_exact(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+    ) -> Result<GpuFrame> {
+        self.decode_to_texture_with_mode(device, queue, GpuDecodeMode::Exact)
+    }
+
+    /// Decode with an explicit [`GpuDecodeMode`].
+    pub fn decode_to_texture_with_mode(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        mode: GpuDecodeMode,
+    ) -> Result<GpuFrame> {
+        self.ensure_gpu(device, mode)?;
+        let t0 = std::time::Instant::now();
+        self.prepare_decode_pack(mode)?;
+        let t1 = std::time::Instant::now();
+        let matrix = self.decode_matrix_i32();
+        let gpu = self.gpu.as_ref().ok_or_else(|| gpu_err("gpu session"))?;
+        let tex = make_bgra_texture(
+            device,
+            self.size.width as u32,
+            self.size.height as u32,
+            gpu.storage_out,
+        );
+        let index = self.dispatch_decode_into(device, queue, &matrix, &tex)?;
+        if let Some(gpu) = self.gpu.as_mut() {
+            gpu.stats.decode_pack_ms = t1.duration_since(t0).as_secs_f64() * 1e3;
+            gpu.stats.decode_dispatch_ms = t1.elapsed().as_secs_f64() * 1e3;
+        }
+        if std::env::var_os("VMX_GPU_TRACE").is_some() {
+            eprintln!(
+                "gpu_trace golomb_pack={:.3}ms dispatch={:.3}ms mode={:?}",
+                t1.duration_since(t0).as_secs_f64() * 1e3,
+                t1.elapsed().as_secs_f64() * 1e3,
+                mode
+            );
+        }
+        Ok(GpuFrame {
+            texture: tex,
+            width: self.size.width as u32,
+            height: self.size.height as u32,
+            submission_index: index,
+        })
+    }
+
+    /// Decode into an existing `Bgra8Unorm` texture instead of allocating one.
+    ///
+    /// The texture must match the codec size and have `STORAGE_BINDING` when
+    /// the adapter exposes `BGRA8UNORM_STORAGE`, otherwise `COPY_DST`.
+    pub fn decode_to_texture_into(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        texture: &wgpu::Texture,
+    ) -> Result<()> {
+        self.decode_to_texture_into_with_mode(device, queue, texture, GpuDecodeMode::Fast)
+    }
+
+    /// Exact variant of [`Self::decode_to_texture_into`].
+    pub fn decode_to_texture_exact_into(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        texture: &wgpu::Texture,
+    ) -> Result<()> {
+        self.decode_to_texture_into_with_mode(device, queue, texture, GpuDecodeMode::Exact)
+    }
+
+    /// Decode into an existing texture with an explicit mode.
+    pub fn decode_to_texture_into_with_mode(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        texture: &wgpu::Texture,
+        mode: GpuDecodeMode,
+    ) -> Result<()> {
+        self.ensure_gpu(device, mode)?;
+        self.validate_decode_target(texture)?;
+        let t0 = std::time::Instant::now();
+        self.prepare_decode_pack(mode)?;
+        let t1 = std::time::Instant::now();
+        let matrix = self.decode_matrix_i32();
+        let _ = self.dispatch_decode_into(device, queue, &matrix, texture)?;
+        if let Some(gpu) = self.gpu.as_mut() {
+            gpu.stats.decode_pack_ms = t1.duration_since(t0).as_secs_f64() * 1e3;
+            gpu.stats.decode_dispatch_ms = t1.elapsed().as_secs_f64() * 1e3;
+        }
+        Ok(())
+    }
+
+    fn prepare_decode_pack(&mut self, mode: GpuDecodeMode) -> Result<()> {
         let strides = [
             self.planes.stride[0],
             self.planes.stride[1],
             self.planes.stride[2],
         ];
-        let t0 = std::time::Instant::now();
-        let mut gpu = self.gpu.take().expect("gpu");
+        let mut gpu = self.gpu.take().ok_or_else(|| gpu_err("gpu session"))?;
         decode_slices_coeffs(
             &self.pool,
             &mut self.slices,
             strides,
             self.dc_shift,
             &mut gpu.pack,
+            mode == GpuDecodeMode::Exact,
         );
         self.gpu = Some(gpu);
-        let t1 = std::time::Instant::now();
+        Ok(())
+    }
+
+    fn decode_matrix_i32(&self) -> [i32; 64] {
         let idx = self.decode_matrix_idx;
-        let matrix: Vec<i32> = self.decode_presets[idx]
-            .iter()
-            .map(|&m| i32::from(m as i16))
-            .collect();
-        let frame = self.dispatch_decode(device, queue, &matrix)?;
-        if std::env::var_os("VMX_GPU_TRACE").is_some() {
-            eprintln!(
-                "gpu_trace golomb_pack={:.3}ms dispatch={:.3}ms",
-                t1.duration_since(t0).as_secs_f64() * 1e3,
-                t1.elapsed().as_secs_f64() * 1e3
-            );
+        let mut matrix = [0i32; 64];
+        for (dst, &src) in matrix.iter_mut().zip(self.decode_presets[idx].iter()) {
+            *dst = i32::from(src as i16);
         }
-        Ok(frame)
+        matrix
+    }
+
+    fn validate_decode_target(&self, texture: &wgpu::Texture) -> Result<()> {
+        let w = self.size.width as u32;
+        let h = self.size.height as u32;
+        if texture.size().width != w || texture.size().height != h {
+            return Err(gpu_err(format!(
+                "texture size {}x{} != codec {w}x{h}",
+                texture.size().width,
+                texture.size().height
+            )));
+        }
+        if texture.format() != wgpu::TextureFormat::Bgra8Unorm {
+            return Err(gpu_err(format!(
+                "decode target must be Bgra8Unorm, got {:?}",
+                texture.format()
+            )));
+        }
+        let storage = self.gpu.as_ref().is_some_and(|g| g.storage_out);
+        let needed = if storage {
+            wgpu::TextureUsages::STORAGE_BINDING
+        } else {
+            wgpu::TextureUsages::COPY_DST
+        };
+        if !texture.usage().contains(needed) {
+            return Err(gpu_err(format!("decode target needs {needed:?} usage")));
+        }
+        Ok(())
     }
 
     /// Decode a 1/8 preview into a BGRA texture on `device`.
@@ -712,22 +913,60 @@ impl Codec {
         device: &wgpu::Device,
         queue: &wgpu::Queue,
     ) -> Result<GpuFrame> {
-        self.ensure_gpu(device)?;
+        let mode = self.gpu.as_ref().map_or(GpuDecodeMode::Fast, |g| g.mode);
+        self.ensure_gpu(device, mode)?;
         let pw = self.preview_size.width as u32;
         let ph = self.preview_size.height as u32;
+        let tex = make_bgra_texture(device, pw, ph, false);
+        self.decode_preview_to_texture_into(device, queue, &tex)?;
+        let index = queue.submit([]);
+        Ok(GpuFrame {
+            texture: tex,
+            width: pw,
+            height: ph,
+            submission_index: index,
+        })
+    }
+
+    /// Upload a 1/8 preview into an existing `Bgra8Unorm` texture.
+    pub fn decode_preview_to_texture_into(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        texture: &wgpu::Texture,
+    ) -> Result<()> {
+        let mode = self.gpu.as_ref().map_or(GpuDecodeMode::Fast, |g| g.mode);
+        self.ensure_gpu(device, mode)?;
+        let pw = self.preview_size.width as u32;
+        let ph = self.preview_size.height as u32;
+        if texture.size().width != pw || texture.size().height != ph {
+            return Err(gpu_err(format!(
+                "preview texture size {}x{} != {pw}x{ph}",
+                texture.size().width,
+                texture.size().height
+            )));
+        }
+        if texture.format() != wgpu::TextureFormat::Bgra8Unorm {
+            return Err(gpu_err(format!(
+                "preview target must be Bgra8Unorm, got {:?}",
+                texture.format()
+            )));
+        }
+        if !texture.usage().contains(wgpu::TextureUsages::COPY_DST) {
+            return Err(gpu_err("preview texture needs COPY_DST usage"));
+        }
         let stride = pw as usize * 4;
         let need = stride * ph as usize;
-        let mut gpu = self.gpu.take().expect("gpu");
+        let mut gpu = self.gpu.take().ok_or_else(|| gpu_err("gpu session"))?;
         gpu.preview_cpu.resize(need, 0);
         let mut preview_cpu = std::mem::take(&mut gpu.preview_cpu);
         self.gpu = Some(gpu);
         self.decode_preview_bgra(&mut preview_cpu, stride)?;
 
-        let mut gpu = self.gpu.take().expect("gpu");
-        let tex = make_bgra_texture(device, pw, ph, false);
+        let mut gpu = self.gpu.take().ok_or_else(|| gpu_err("gpu session"))?;
         queue.write_texture(
             wgpu::TexelCopyTextureInfo {
-                texture: &tex,
+                texture,
                 mip_level: 0,
                 origin: wgpu::Origin3d::ZERO,
                 aspect: wgpu::TextureAspect::All,
@@ -746,13 +985,7 @@ impl Codec {
         );
         gpu.preview_cpu = preview_cpu;
         self.gpu = Some(gpu);
-        let index = queue.submit([]);
-        Ok(GpuFrame {
-            texture: tex,
-            width: pw,
-            height: ph,
-            submission_index: index,
-        })
+        Ok(())
     }
 
     /// Encode a BGRA (or RGBA) texture already on `device`, including the alpha plane.
@@ -792,7 +1025,7 @@ impl Codec {
             if !texture.usage().contains(wgpu::TextureUsages::COPY_SRC) {
                 return Err(gpu_err("texture must have TEXTURE_BINDING or COPY_SRC"));
             }
-            self.encode_submitted_finish(device)?;
+            self.drain_pending_encodes(device)?;
             let w = texture.size().width;
             let h = texture.size().height;
             let pixels = read_texture_bgra(device, queue, texture, w, h)?;
@@ -804,7 +1037,8 @@ impl Codec {
                 self.encode_bgrx(&pixels, w as usize * 4)
             };
         }
-        self.ensure_gpu(device)?;
+        let mode = self.gpu.as_ref().map_or(GpuDecodeMode::Fast, |g| g.mode);
+        self.ensure_gpu(device, mode)?;
         self.image_format = if include_alpha {
             crate::types::ImageFormat::Bgra
         } else {
@@ -813,10 +1047,61 @@ impl Codec {
         self.dispatch_encode_submit(device, queue, texture, include_alpha)
     }
 
+    /// Encode from a caller-owned texture view, avoiding a per-frame view
+    /// creation. `texture` is used for validation and for the CPU fallback.
+    pub fn encode_from_texture_view(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        texture: &wgpu::Texture,
+        view: &wgpu::TextureView,
+        include_alpha: bool,
+    ) -> Result<()> {
+        self.drain_pending_encodes(device)?;
+        self.encode_from_texture_view_submit(device, queue, texture, view, include_alpha)?;
+        self.encode_submitted_finish(device)
+    }
+
+    /// Submit GPU FDCT+quant from a caller-owned view and return immediately.
+    pub fn encode_from_texture_view_submit(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        texture: &wgpu::Texture,
+        view: &wgpu::TextureView,
+        include_alpha: bool,
+    ) -> Result<()> {
+        self.validate_encode_texture(texture)?;
+        if !can_sample_encode(texture) {
+            return Err(gpu_err(
+                "texture must be sampleable for a texture-view encode",
+            ));
+        }
+        let mode = self.gpu.as_ref().map_or(GpuDecodeMode::Fast, |g| g.mode);
+        self.ensure_gpu(device, mode)?;
+        self.image_format = if include_alpha {
+            crate::types::ImageFormat::Bgra
+        } else {
+            crate::types::ImageFormat::Bgrx
+        };
+        self.dispatch_encode_submit_view(device, queue, view, include_alpha)
+    }
+
     /// Finish a previous [`Self::encode_from_texture_submit`]: map coefficients
     /// and Golomb-encode slices. No-op when nothing is in flight.
     pub fn encode_submitted_finish(&mut self, device: &wgpu::Device) -> Result<()> {
         self.dispatch_encode_finish(device)
+    }
+
+    fn drain_pending_encodes(&mut self, device: &wgpu::Device) -> Result<()> {
+        while self
+            .gpu
+            .as_ref()
+            .is_some_and(|g| !g.pending_encode.is_empty())
+        {
+            self.dispatch_encode_finish(device)?;
+        }
+        Ok(())
     }
 
     fn encode_from_texture_planes(
@@ -826,6 +1111,9 @@ impl Codec {
         texture: &wgpu::Texture,
         include_alpha: bool,
     ) -> Result<()> {
+        // A synchronous encode must return the frame it was given. Finish any
+        // earlier async submissions first so this frame is the only pending one.
+        self.drain_pending_encodes(device)?;
         self.encode_from_texture_submit(device, queue, texture, include_alpha)?;
         self.encode_submitted_finish(device)
     }
@@ -849,12 +1137,13 @@ impl Codec {
         }
     }
 
-    fn dispatch_decode(
+    fn dispatch_decode_into(
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         matrix: &[i32],
-    ) -> Result<GpuFrame> {
+        tex: &wgpu::Texture,
+    ) -> Result<wgpu::SubmissionIndex> {
         let gpu = self.gpu.as_mut().ok_or_else(|| gpu_err("gpu session"))?;
         let t_up = std::time::Instant::now();
 
@@ -890,7 +1179,6 @@ impl Codec {
         };
         write_pod(queue, &gpu.fused_ubo, &fused);
 
-        let tex = make_bgra_texture(device, w, h, gpu.storage_out);
         let tex_bind = gpu.storage_out.then(|| {
             decode_storage_bind(
                 device,
@@ -898,7 +1186,7 @@ impl Codec {
                 &gpu.fused_ubo,
                 &gpu.matrix_buf,
                 &gpu.coeff_in,
-                &tex,
+                tex,
             )
         });
         let tiles = gpu.u_blocks_x.saturating_mul(gpu.u_blocks_y).max(1);
@@ -930,7 +1218,7 @@ impl Codec {
                     },
                 },
                 wgpu::TexelCopyTextureInfo {
-                    texture: &tex,
+                    texture: tex,
                     mip_level: 0,
                     origin: wgpu::Origin3d::ZERO,
                     aspect: wgpu::TextureAspect::All,
@@ -951,12 +1239,7 @@ impl Codec {
                 gpu.storage_out
             );
         }
-        Ok(GpuFrame {
-            texture: tex,
-            width: w,
-            height: h,
-            submission_index: index,
-        })
+        Ok(index)
     }
 
     fn dispatch_encode_submit(
@@ -966,10 +1249,32 @@ impl Codec {
         texture: &wgpu::Texture,
         include_alpha: bool,
     ) -> Result<()> {
-        if self
+        let view = {
+            let gpu = self.gpu.as_mut().ok_or_else(|| gpu_err("gpu session"))?;
+            match &gpu.enc_view {
+                Some((cached, view)) if cached == texture => view.clone(),
+                _ => {
+                    let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+                    gpu.enc_view = Some((texture.clone(), view.clone()));
+                    gpu.enc_bind_view = None;
+                    view
+                }
+            }
+        };
+        self.dispatch_encode_submit_view(device, queue, &view, include_alpha)
+    }
+
+    fn dispatch_encode_submit_view(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        view: &wgpu::TextureView,
+        include_alpha: bool,
+    ) -> Result<()> {
+        while self
             .gpu
             .as_ref()
-            .is_some_and(|g| g.pending_encode.is_some())
+            .is_some_and(|g| g.pending_encode.len() >= RING)
         {
             self.dispatch_encode_finish(device)?;
         }
@@ -1020,7 +1325,7 @@ impl Codec {
             y_b: i32::from(rgb[0].b),
             a_plane_off: 0,
             a_coeff_off: gpu.y_coeff_count + gpu.u_coeff_count * 2,
-            src_rgba: 0,
+            include_alpha: u32::from(include_alpha),
         };
         if gpu.last_enc_params != Some(ep) {
             write_pod(queue, &gpu.enc_ubo, &ep);
@@ -1033,27 +1338,37 @@ impl Codec {
             for (dst, &src) in matrix.iter_mut().zip(self.encode_presets[idx].iter()) {
                 *dst = i32::from(src);
             }
-            queue.write_buffer(&gpu.enc_tables, 192 * 4, bytemuck::bytes_of(&matrix));
+            queue.write_buffer(&gpu.enc_matrix_buf, 0, bytemuck::bytes_of(&matrix));
             gpu.last_enc_matrix_idx = Some(idx);
         }
 
-        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-        let enc_bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("enc-bg"),
-            layout: &gpu.encode_layout,
-            entries: &[
-                bind(0, &gpu.enc_ubo),
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::TextureView(&view),
-                },
-                bind(2, &gpu.enc_tables),
-                bind(3, &gpu.coeffs),
-            ],
-        });
-
         gpu.enc_ring = (gpu.enc_ring + 1) % gpu.coeff_read.len().max(1);
         let slot = gpu.enc_ring;
+        if gpu.enc_bind_view.as_ref() != Some(view) {
+            gpu.enc_bind_view = Some(view.clone());
+            for cached in &mut gpu.enc_binds {
+                *cached = None;
+            }
+        }
+        if gpu.enc_binds[slot].is_none() {
+            let bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("enc-bg"),
+                layout: &gpu.encode_layout,
+                entries: &[
+                    bind(0, &gpu.enc_ubo),
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::TextureView(view),
+                    },
+                    bind(2, &gpu.enc_matrix_buf),
+                    bind(3, &gpu.coeff_out[slot]),
+                ],
+            });
+            gpu.enc_binds[slot] = Some(bind);
+        }
+        let enc_bind = gpu.enc_binds[slot]
+            .as_ref()
+            .ok_or_else(|| gpu_err("encode bind group"))?;
         let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("vmx-encode"),
         });
@@ -1062,40 +1377,42 @@ impl Codec {
                 label: Some("fdct"),
                 timestamp_writes: None,
             });
-            pass.set_bind_group(0, &enc_bind, &[]);
-            pass.set_pipeline(&gpu.fdct_y_pipeline);
-            pass.dispatch_workgroups((y_bx * y_by).div_ceil(64).max(1), 1, 1);
-            pass.set_pipeline(&gpu.fdct_u_pipeline);
-            pass.dispatch_workgroups((u_bx * u_by).div_ceil(64).max(1), 1, 1);
-            pass.set_pipeline(&gpu.fdct_v_pipeline);
-            pass.dispatch_workgroups((u_bx * u_by).div_ceil(64).max(1), 1, 1);
-            if include_alpha {
-                pass.set_pipeline(&gpu.fdct_a_pipeline);
-                pass.dispatch_workgroups((y_bx * y_by).div_ceil(64).max(1), 1, 1);
-            }
+            pass.set_bind_group(0, enc_bind, &[]);
+            pass.set_pipeline(&gpu.encode_tile_pipeline);
+            pass.dispatch_workgroups(y_bx.div_ceil(2) * y_by, 1, 1);
         }
         let coeff_count = gpu.y_coeff_count
             + gpu.u_coeff_count * 2
             + if include_alpha { gpu.a_coeff_count } else { 0 };
         let bytes = u64::from(coeff_count) * 2;
-        enc.copy_buffer_to_buffer(&gpu.coeffs, 0, &gpu.coeff_read[slot], 0, bytes.max(4));
+        enc.copy_buffer_to_buffer(
+            &gpu.coeff_out[slot],
+            0,
+            &gpu.coeff_read[slot],
+            0,
+            bytes.max(4),
+        );
         let index = queue.submit(Some(enc.finish()));
-        gpu.pending_encode = Some(PendingGpuEncode {
+        gpu.pending_encode.push_back(PendingGpuEncode {
             slot,
             include_alpha,
             index,
         });
+        let submit_ms = t0.elapsed().as_secs_f64() * 1e3;
+        if let Some(gpu) = self.gpu.as_mut() {
+            gpu.stats.encode_submit_ms = submit_ms;
+        }
         if std::env::var_os("VMX_GPU_TRACE").is_some() {
             eprintln!(
                 "gpu_trace encode_submit={:.3}ms alpha={include_alpha} bytes={bytes}",
-                t0.elapsed().as_secs_f64() * 1e3
+                submit_ms
             );
         }
         Ok(())
     }
 
     fn dispatch_encode_finish(&mut self, device: &wgpu::Device) -> Result<()> {
-        let Some(pending) = self.gpu.as_mut().and_then(|g| g.pending_encode.take()) else {
+        let Some(pending) = self.gpu.as_mut().and_then(|g| g.pending_encode.pop_front()) else {
             return Ok(());
         };
         let t0 = std::time::Instant::now();
@@ -1124,10 +1441,14 @@ impl Codec {
             a_n,
             self.dc_shift,
         )?;
+        let finish_ms = t0.elapsed().as_secs_f64() * 1e3;
+        if let Some(gpu) = self.gpu.as_mut() {
+            gpu.stats.encode_finish_ms = finish_ms;
+        }
         if std::env::var_os("VMX_GPU_TRACE").is_some() {
             eprintln!(
                 "gpu_trace encode_finish={:.3}ms y={y_n} u={u_n} a={a_n}",
-                t0.elapsed().as_secs_f64() * 1e3
+                finish_ms
             );
         }
         Ok(())
@@ -1202,7 +1523,6 @@ pub fn read_texture_bgra(
         },
     );
     let index = queue.submit(Some(enc.finish()));
-    wait(device, &index);
     let slice = buf.slice(..);
     slice.map_async(wgpu::MapMode::Read, |_| {});
     wait(device, &index);

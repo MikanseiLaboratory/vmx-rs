@@ -208,7 +208,10 @@ pub fn decode_plane_scalar(
     ac.flush_remaining_read_bits();
 }
 
-/// Entropy-decode one slice plane into 32-byte GPU records (i16 DC + i8 AC[1..30]).
+/// Entropy-decode one slice plane into GPU coefficient records.
+///
+/// `exact == false` writes 32-byte records (i16 DC + i8 AC[1..30]).
+/// `exact == true` writes 132-byte records (64 i16 + a DC-only flag).
 #[cfg(feature = "wgpu")]
 #[inline(always)]
 pub fn decode_plane_coeffs(
@@ -219,6 +222,7 @@ pub fn decode_plane_coeffs(
     dc_shift: i32,
     temp_block: &mut [i16; 64],
     out: &mut [u8],
+    exact: bool,
 ) {
     let height = SLICE_HEIGHT as usize;
     let mut dc_pred: i16 = 0;
@@ -228,6 +232,7 @@ pub fn decode_plane_coeffs(
 
     for _y in (0..height).step_by(8) {
         for _x in (0..stride).step_by(8) {
+            let valid = terms_to_decode < 64;
             temp_block.fill(0);
 
             while terms_to_decode < 64 {
@@ -274,10 +279,18 @@ pub fn decode_plane_coeffs(
             temp_block[0] = temp_block[0].wrapping_add(dc_pred);
             dc_pred = temp_block[0];
 
-            let o = bi * 32;
-            out[o..o + 2].copy_from_slice(&temp_block[0].to_le_bytes());
-            for i in 1..=30 {
-                out[o + 1 + i] = temp_block[i].clamp(-128, 127) as i8 as u8;
+            if exact {
+                let o = bi * 132;
+                for i in 0..64 {
+                    out[o + 2 * i..o + 2 * i + 2].copy_from_slice(&temp_block[i].to_le_bytes());
+                }
+                out[o + 128..o + 132].copy_from_slice(&u32::from(!valid).to_le_bytes());
+            } else {
+                let o = bi * 32;
+                out[o..o + 2].copy_from_slice(&temp_block[0].to_le_bytes());
+                for i in 1..=30 {
+                    out[o + 1 + i] = temp_block[i].clamp(-128, 127) as i8 as u8;
+                }
             }
             bi += 1;
         }

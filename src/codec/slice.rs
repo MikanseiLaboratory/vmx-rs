@@ -326,17 +326,23 @@ pub fn decode_slices_coeffs(
     strides: [usize; 3],
     dc_shift: i32,
     pack: &mut Vec<u8>,
+    exact: bool,
 ) -> (usize, usize, usize) {
-    use crate::gpu::pack::PACK_BYTES;
+    use crate::gpu::pack::{PACK_BYTES_EXACT, PACK_BYTES_FAST};
 
     let n_slices = slices.len();
+    let pack_bytes = if exact {
+        PACK_BYTES_EXACT
+    } else {
+        PACK_BYTES_FAST
+    };
     let blocks_per_slice = |stride: usize| (stride / 8) * (SLICE_HEIGHT as usize / 8);
     let y_bps = blocks_per_slice(strides[0]);
     let u_bps = blocks_per_slice(strides[1]);
     let v_bps = blocks_per_slice(strides[2]);
-    let y_len = n_slices * y_bps * PACK_BYTES;
-    let u_len = n_slices * u_bps * PACK_BYTES;
-    let v_len = n_slices * v_bps * PACK_BYTES;
+    let y_len = n_slices * y_bps * pack_bytes;
+    let u_len = n_slices * u_bps * pack_bytes;
+    let v_len = n_slices * v_bps * pack_bytes;
     ensure_pack_len(pack, y_len + u_len + v_len);
     let pack_ptr = pack.as_mut_ptr() as usize;
 
@@ -345,20 +351,20 @@ pub fn decode_slices_coeffs(
         // SAFETY: each slice writes disjoint Y/U/V windows in the concatenated pack.
         let y_out = unsafe {
             std::slice::from_raw_parts_mut(
-                (pack_ptr as *mut u8).add(i * y_bps * PACK_BYTES),
-                y_bps * PACK_BYTES,
+                (pack_ptr as *mut u8).add(i * y_bps * pack_bytes),
+                y_bps * pack_bytes,
             )
         };
         let u_out = unsafe {
             std::slice::from_raw_parts_mut(
-                (pack_ptr as *mut u8).add(y_len + i * u_bps * PACK_BYTES),
-                u_bps * PACK_BYTES,
+                (pack_ptr as *mut u8).add(y_len + i * u_bps * pack_bytes),
+                u_bps * pack_bytes,
             )
         };
         let v_out = unsafe {
             std::slice::from_raw_parts_mut(
-                (pack_ptr as *mut u8).add(y_len + u_len + i * v_bps * PACK_BYTES),
-                v_bps * PACK_BYTES,
+                (pack_ptr as *mut u8).add(y_len + u_len + i * v_bps * pack_bytes),
+                v_bps * pack_bytes,
             )
         };
         crate::codec::plane::decode_plane_coeffs(
@@ -369,6 +375,7 @@ pub fn decode_slices_coeffs(
             dc_shift,
             &mut slice.temp_block,
             y_out,
+            exact,
         );
         crate::codec::plane::decode_plane_coeffs(
             1,
@@ -378,6 +385,7 @@ pub fn decode_slices_coeffs(
             dc_shift,
             &mut slice.temp_block,
             u_out,
+            exact,
         );
         crate::codec::plane::decode_plane_coeffs(
             2,
@@ -387,6 +395,7 @@ pub fn decode_slices_coeffs(
             dc_shift,
             &mut slice.temp_block,
             v_out,
+            exact,
         );
     });
     (y_len, u_len, v_len)

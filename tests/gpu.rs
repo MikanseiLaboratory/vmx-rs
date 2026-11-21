@@ -588,3 +588,37 @@ fn gpu_encode_header_quality_follows_submit_time() {
     dec.decode_bgra(&mut out, stride).unwrap();
     assert_psnr(&src, &out, 20.0, "mid-pipeline quality change");
 }
+
+#[test]
+fn gpu_mode_switch_keeps_in_flight_encodes() {
+    let Some((device, queue)) = device() else {
+        eprintln!("skip: no wgpu adapter");
+        return;
+    };
+    let width = 32i32;
+    let height = 32i32;
+    let src = sample_bgra(width, height);
+    let tex = gpu::upload_bgra_texture(&device, &queue, width as u32, height as u32, &src);
+
+    let mut enc = Codec::new(Config::new(width, height)).unwrap();
+    enc.encode_from_texture_submit(&device, &queue, &tex, false)
+        .unwrap();
+    assert_eq!(enc.pending_encode_frames(), 1);
+
+    // Decoding with another mode would rebuild the session and silently drop
+    // the submitted frame; it must fail instead, leaving the frame finishable.
+    let err = enc
+        .decode_to_texture_exact(&device, &queue)
+        .expect_err("mode switch must not drop a pending encode");
+    assert!(
+        matches!(err, vmx::VmxError::Gpu(_)),
+        "unexpected error: {err}"
+    );
+    assert_eq!(enc.pending_encode_frames(), 1);
+
+    enc.encode_submitted_finish(&device).unwrap();
+    assert_eq!(enc.pending_encode_frames(), 0);
+    let mut bs = vec![0u8; 1 << 20];
+    let len = enc.save_to(&mut bs).unwrap();
+    assert!(len > 0);
+}

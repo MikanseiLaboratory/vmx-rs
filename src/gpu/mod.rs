@@ -730,6 +730,18 @@ impl Codec {
             None => true,
         };
         if need {
+            // A rebuild drops the old device's bind groups, buffers and any
+            // submitted-but-unfinished frames. Refuse instead of losing them:
+            // the caller still holds the old device and can finish them.
+            if let Some(gpu) = &self.gpu
+                && !gpu.pending_encode.is_empty()
+            {
+                return Err(gpu_err(format!(
+                    "GPU session is changing device/mode with {} encode frame(s) in flight; \
+                     finish each submission before switching",
+                    gpu.pending_encode.len()
+                )));
+            }
             self.gpu = Some(GpuSession::new(device, w, h, pw, ph, mode)?);
         }
         Ok(())
@@ -1094,10 +1106,26 @@ impl Codec {
         self.dispatch_encode_submit_view(device, queue, view, include_alpha)
     }
 
-    /// Finish a previous [`Self::encode_from_texture_submit`]: map coefficients
-    /// and Golomb-encode slices. No-op when nothing is in flight.
+    /// Finish the oldest outstanding [`Self::encode_from_texture_submit`]:
+    /// map coefficients and Golomb-encode slices. No-op when nothing is in
+    /// flight.
+    ///
+    /// Submissions finish in the order they were made (FIFO): with three
+    /// submissions in flight the first call finishes the first frame, so pair
+    /// each submit with exactly one finish and call [`Codec::save_to`] in
+    /// between. [`Self::pending_encode_frames`] reports how many submissions
+    /// are still outstanding.
     pub fn encode_submitted_finish(&mut self, device: &wgpu::Device) -> Result<()> {
         self.dispatch_encode_finish(device)
+    }
+
+    /// Number of encode submissions that have not been finished yet.
+    ///
+    /// [`Codec::save_to`] writes the frame prepared by the most recent
+    /// [`Self::encode_submitted_finish`]; this is how many finishes are still
+    /// due for submissions already made.
+    pub fn pending_encode_frames(&self) -> usize {
+        self.gpu.as_ref().map_or(0, |g| g.pending_encode.len())
     }
 
     fn drain_pending_encodes(&mut self, device: &wgpu::Device) -> Result<()> {
